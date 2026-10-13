@@ -215,7 +215,8 @@ function loginView() {
   }).join('');
   return `<div class="login"><h1>재해예방 기술지도 관리시스템 <span class="badge b-orange">DEMO</span></h1>
     <div class="desc">공사(일반·단가계약)의 기술지도 대상여부를 자동 판정하고, 협력업체 관리부서 · 안전보건환경부서 · 기술지도기관 · 협력업체 · 구매부서가
-    업무 흐름(상태)에 따라 각자의 업무를 수행하도록 지원합니다.<br><b>테스트할 사용자(역할)를 선택하세요.</b> 상단에서 언제든 사용자를 전환할 수 있습니다.</div>${groups}</div>`;
+    업무 흐름(상태)에 따라 각자의 업무를 수행하도록 지원합니다.<br><b>테스트할 사용자(역할)를 선택하세요.</b> 상단에서 언제든 사용자를 전환할 수 있습니다.</div>
+    ${S.meta.storageMode === 'local' ? '<div class="alert warn">이 주소에서는 데이터가 <b>지금 사용하는 브라우저에만</b> 저장됩니다. 다른 사람·다른 PC와 데이터가 공유되지 않으며, 브라우저 기록을 지우면 시연 데이터로 다시 시작합니다. 첨부파일은 목록만 기록됩니다.</div>' : ''}${groups}</div>`;
 }
 function bindLogin() {
   $$('.user-card').forEach((c) => c.addEventListener('click', () => login(c.dataset.uid)));

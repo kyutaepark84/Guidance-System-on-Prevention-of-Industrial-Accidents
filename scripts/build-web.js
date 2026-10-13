@@ -86,7 +86,28 @@ ${app}
 </script>
 `;
 
+// ① claude.ai 웹페이지(Artifact)용: 문서 골격 없이 본문만
 const out = path.join(ROOT, 'web', 'dist', 'tg-demo.html');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, html);
 console.log(`웹페이지 빌드 완료: ${path.relative(ROOT, out)} (${(html.length / 1024).toFixed(0)} KB)`);
+
+// ② GitHub Pages용: 완전한 HTML 문서 (docs/index.html). 데이터는 각 브라우저에 저장된다.
+const icon = read('public/index.html').match(/<link rel="icon"[^>]*>/);
+const page = `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${icon ? icon[0] : ''}
+${html.split('\n')[0]}
+</head>
+<body>
+${html.split('\n').slice(1).join('\n')}
+</body>
+</html>
+`;
+const pagesOut = path.join(ROOT, 'docs', 'index.html');
+fs.writeFileSync(pagesOut, page);
+fs.writeFileSync(path.join(ROOT, 'docs', '.nojekyll'), '');
+console.log(`GitHub Pages 빌드 완료: ${path.relative(ROOT, pagesOut)}`);

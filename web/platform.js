@@ -188,7 +188,17 @@ async function uploadFile(file) {
 }
 
 async function saveFile(data, filename) {
-  if (!DL) throw new Error('이 화면에서는 파일 내려받기를 사용할 수 없습니다.');
+  if (!DL) {
+    if (P.mode === 'shared') throw new Error('이 화면에서는 파일 내려받기를 사용할 수 없습니다.');
+    // 일반 웹사이트(GitHub Pages 등): 브라우저 기본 내려받기
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 3000);
+    return;
+  }
   try {
     await DL.save({ filename, data: data instanceof Blob ? data : new Blob([data]) });
   } catch (e) {

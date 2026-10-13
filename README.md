@@ -16,6 +16,14 @@ claude.ai 웹페이지로 배포된 DEMO: **https://claude.ai/artifact/RrWyn5JFH
 - 다른 사람이 쓰려면 페이지 우측 상단 **공유(Share)** 에서 대상자를 추가하고, 데이터를 입력해야 하는 사람은 **참여자(Contributor) 이상** 권한을 주세요.
 - 웹페이지 다시 만들기: `node scripts/build-web.js` → `web/dist/tg-demo.html` (판정·업무흐름 코드는 `server/`와 동일한 소스를 사용)
 
+### GitHub Pages (로그인 없이 누구나 접속)
+
+주소: **https://kyutaepark84.github.io/Guidance-System-on-Prevention-of-Industrial-Accidents/**
+
+- 최초 1회 설정: GitHub 저장소 → Settings → Pages → Build and deployment → Source: `Deploy from a branch` → Branch: `main`(또는 이 작업 브랜치) / 폴더 `/docs` → Save. 1~2분 후 위 주소로 접속됩니다.
+- 이 주소에서는 데이터가 **각자의 브라우저에만** 저장됩니다(사람 간 공유 안 됨, 첨부파일은 목록만 기록). 화면·업무 흐름 체험용이며, 여러 부서가 같은 데이터로 함께 테스트하려면 위 claude.ai 주소나 아래 사내 서버 실행을 사용하세요.
+- `docs/index.html`은 `node scripts/build-web.js`로 생성됩니다. 화면이나 로직을 고친 뒤 다시 빌드해 커밋하면 반영됩니다.
+
 ## 1. 실행 방법 (사내 PC/서버에서 직접 실행)
 
 ```bash
