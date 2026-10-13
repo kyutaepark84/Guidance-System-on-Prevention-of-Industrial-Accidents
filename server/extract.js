@@ -9,8 +9,8 @@ const ExcelJS = require('exceljs');
 // ───────────────────────── 텍스트 추출 ─────────────────────────
 
 function decodeText(buf) {
-  const utf8 = buf.toString('utf8');
-  if (!utf8.includes('�')) return utf8.replace(/^﻿/, '');
+  const utf8 = new TextDecoder('utf-8').decode(buf);
+  if (!utf8.includes('\uFFFD')) return utf8.replace(/^\uFEFF/, '');
   try {
     return new TextDecoder('euc-kr').decode(buf); // 한글 윈도우(CP949) 텍스트
   } catch {
@@ -28,16 +28,8 @@ function xmlText(xml, paraTag, textTag) {
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 }
 
-async function pdfText(buf) {
-  const { PDFParse } = require('pdf-parse');
-  const parser = new PDFParse({ data: new Uint8Array(buf) });
-  try {
-    const res = await parser.getText();
-    return res.text || '';
-  } finally {
-    await parser.destroy().catch(() => {});
-  }
-}
+// PDF 텍스트 추출은 실행 환경별 구현(서버: pdf-parse / 브라우저: pdf.js)
+const pdfText = (buf) => require('./pdftext')(buf);
 
 async function docxText(buf) {
   const zip = await JSZip.loadAsync(buf);

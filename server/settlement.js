@@ -35,7 +35,7 @@ async function readRows(buf, filename) {
   const ext = path.extname(filename || '').toLowerCase();
   const wb = new ExcelJS.Workbook();
   if (ext === '.csv') {
-    const text = buf.toString('utf8').replace(/^﻿/, '');
+    const text = new TextDecoder('utf-8').decode(buf).replace(/^\uFEFF/, '');
     return text.split(/\r?\n/).filter((l) => l.trim()).map(splitCsv);
   }
   if (ext !== '.xlsx') throw new Error('정산실적은 XLSX 또는 CSV 파일로 올려 주세요.');

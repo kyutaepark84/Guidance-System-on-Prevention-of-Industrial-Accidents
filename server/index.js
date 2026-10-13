@@ -28,7 +28,7 @@ const upload = multer({
 // 브라우저가 보낸 UTF-8 파일명이 latin1로 해석되는 문제 보정
 function fixName(name) {
   const conv = Buffer.from(name, 'latin1').toString('utf8');
-  return /[�]/.test(conv) ? name : conv;
+  return /[\uFFFD]/.test(conv) ? name : conv;
 }
 
 const app = express();

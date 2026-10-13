@@ -3,6 +3,12 @@
 
 const S = { meta: null, user: null, cache: {} };
 const $ = (sel, root = document) => root.querySelector(sel);
+// 브라우저 저장소는 막혀 있을 수 있으므로 항상 예외 처리
+const LS = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* 무시 */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* 무시 */ } },
+};
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 // ───────────── 유틸 ─────────────
@@ -28,6 +34,7 @@ function judgeBadge(p) {
 }
 
 async function api(method, url, body) {
+  if (window.__TG_LOCAL) return window.__TG_LOCAL.api(method, url, body, S.user);
   const opt = { method, headers: {} };
   if (S.user) opt.headers['x-user-id'] = S.user.id;
   if (body instanceof FormData) opt.body = body;
@@ -48,6 +55,10 @@ function toast(msg, kind = '') {
 }
 
 async function download(url, fallbackName) {
+  if (window.__TG_LOCAL) {
+    try { await window.__TG_LOCAL.download(url, S.user); } catch (e) { toast(e.message, 'err'); }
+    return;
+  }
   try {
     const res = await fetch('/api' + url, { headers: { 'x-user-id': S.user.id } });
     if (!res.ok) throw new Error((await res.json()).error);
@@ -95,12 +106,12 @@ function shell(title, inner) {
   const sim = S.meta.settings.demoToday;
   const users = S.meta.users.filter((u) => u.active !== false);
   const opts = Object.keys(S.meta.roles).map((r) => `<optgroup label="${esc(roleLabel(r))}">${users.filter((u) => u.role === r).map((u) => `<option value="${u.id}" ${u.id === S.user.id ? 'selected' : ''}>${esc(u.name)} · ${esc(orgName(u))}</option>`).join('')}</optgroup>`).join('');
-  const route = location.hash.split('?')[0].split('/').slice(0, 2).join('/');
+  const route = S.route.split('?')[0].split('/').slice(0, 2).join('/');
   return `<div class="layout">
     <aside class="sidebar">
       <div class="logo"><b>재해예방 기술지도<br>관리시스템</b><span>DEMO · 산업안전보건법 제73조</span></div>
       <nav>${NAV.filter((n) => !n.admin || S.user.role === 'ADMIN').map((n) => n.sep ? `<div class="sep">${n.sep}</div>` : `<a href="${n.href}" class="${route === n.href ? 'active' : ''}"><span>${n.icon}</span>${n.label}${n.badge ? '<span class="nav-badge" id="unread-badge" style="display:none"></span>' : ''}</a>`).join('')}</nav>
-      <div class="foot">DEMO 버전 — 실제 메일/SMS는 발송되지 않으며 '알림' 메뉴에 기록됩니다.</div>
+      <div class="foot">${storageNote()}DEMO 버전 — 실제 메일/SMS는 발송되지 않으며 '알림' 메뉴에 기록됩니다.</div>
     </aside>
     <div class="main">
       <div class="topbar">
@@ -114,6 +125,14 @@ function shell(title, inner) {
     </div></div>`;
 }
 
+function storageNote() {
+  const m = S.meta;
+  if (m.readOnly) return '<div style="color:#f0a64b;margin-bottom:6px">읽기 전용으로 열림 — 데이터를 바꾸려면 편집 권한이 필요합니다.</div>';
+  if (m.storageMode === 'shared') return '<div style="margin-bottom:6px">● 공유 데이터: 이 주소로 접속한 모든 사람이 같은 데이터를 봅니다.</div>';
+  if (m.storageMode === 'local') return '<div style="margin-bottom:6px">● 이 브라우저에만 저장됩니다.</div>';
+  return '';
+}
+
 function orgName(u) {
   const m = S.meta;
   return (m.departments.find((d) => d.id === u.orgId) || m.companies.find((c) => c.id === u.orgId) || m.agencies.find((a) => a.id === u.orgId) || { name: roleLabel(u.role) }).name;
@@ -121,7 +140,7 @@ function orgName(u) {
 
 function bindShell() {
   $('#user-switch').addEventListener('change', (e) => login(e.target.value, true));
-  $('#logout').addEventListener('click', () => { localStorage.removeItem('tg_user'); S.user = null; render(); });
+  $('#logout').addEventListener('click', () => { LS.del('tg_user'); S.user = null; render(); });
   api('GET', '/dashboard').then((d) => {
     const b = $('#unread-badge');
     if (b && d.unread) { b.textContent = d.unread; b.style.display = ''; }
@@ -130,8 +149,8 @@ function bindShell() {
 
 async function login(uid, keepRoute) {
   S.user = S.meta.users.find((u) => u.id === uid) || null;
-  if (S.user) localStorage.setItem('tg_user', uid);
-  if (!keepRoute) location.hash = '#/dashboard';
+  if (S.user) LS.set('tg_user', uid);
+  if (!keepRoute) S.route = '#/dashboard';
   render();
 }
 
@@ -141,7 +160,7 @@ async function render() {
   const app = $('#app');
   if (!S.meta) await loadMeta();
   if (!S.user) { app.innerHTML = loginView(); bindLogin(); return; }
-  const [, page, id] = (location.hash || '#/dashboard').split('?')[0].split('/');
+  const [, page, id] = (S.route || '#/dashboard').split('?')[0].split('/');
   const pages = { dashboard: pageDashboard, projects: id ? () => pageProject(id) : pageProjects, settlements: pageSettlements, calendar: pageCalendar, notifications: pageNotifications, flow: pageFlow, admin: pageAdmin };
   const fn = pages[page] || pageDashboard;
   try {
@@ -151,10 +170,44 @@ async function render() {
     bindShell();
   }
 }
-window.addEventListener('hashchange', () => { $('#modal-root').innerHTML = ''; render(); });
+// 화면 이동: 내부 라우팅(S.route). 서버 실행 시 주소창 해시도 함께 갱신한다.
+S.route = (!window.__TG_LOCAL && location.hash.startsWith('#/')) ? location.hash : '#/dashboard';
+function go(route) {
+  S.route = route;
+  if (!window.__TG_LOCAL) { try { history.replaceState(null, '', route); } catch { /* 무시 */ } }
+  $('#modal-root').innerHTML = '';
+  render();
+  window.scrollTo(0, 0);
+}
+window.go = go;
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href^="#/"]');
+  if (a) { e.preventDefault(); go(a.getAttribute('href')); }
+});
+
+// 브라우저 confirm()을 쓰지 않는 확인 창
+function askConfirm(message, okLabel = '확인') {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    modal('확인', `<div style="line-height:1.6">${esc(message)}</div>`, {
+      footer: `<button class="btn" data-close>취소</button><button class="btn primary" id="confirm-ok">${esc(okLabel)}</button>`,
+      onMount(el, close) {
+        $('#confirm-ok', el).addEventListener('click', () => { finish(true); close(); });
+        new MutationObserver((m, obs) => { if (!el.isConnected) { obs.disconnect(); finish(false); } }).observe($('#modal-root'), { childList: true });
+      },
+    });
+  });
+}
 
 // ───────────── 로그인(DEMO 사용자 선택) ─────────────
 function loginView() {
+  if (!S.meta.users.length) {
+    return `<div class="login"><h1>재해예방 기술지도 관리시스템 <span class="badge b-orange">DEMO</span></h1>
+      <div class="panel"><div class="hd"><h3>아직 데이터가 없습니다</h3></div><div class="bd">
+        <div class="desc">시연용 기준정보(부서·협력업체·기술지도기관·사용자)와 진행 단계가 다른 샘플 공사 9건을 만들어 바로 테스트를 시작할 수 있습니다. 업체·기관·인물은 모두 가상입니다.</div>
+        <button class="btn primary" id="setup-seed">시연 데이터 만들기</button></div></div></div>`;
+  }
   const groups = Object.keys(S.meta.roles).map((r) => {
     const us = S.meta.users.filter((u) => u.role === r && u.active !== false);
     if (!us.length) return '';
@@ -164,23 +217,30 @@ function loginView() {
     <div class="desc">공사(일반·단가계약)의 기술지도 대상여부를 자동 판정하고, 협력업체 관리부서 · 안전보건환경부서 · 기술지도기관 · 협력업체 · 구매부서가
     업무 흐름(상태)에 따라 각자의 업무를 수행하도록 지원합니다.<br><b>테스트할 사용자(역할)를 선택하세요.</b> 상단에서 언제든 사용자를 전환할 수 있습니다.</div>${groups}</div>`;
 }
-function bindLogin() { $$('.user-card').forEach((c) => c.addEventListener('click', () => login(c.dataset.uid))); }
+function bindLogin() {
+  $$('.user-card').forEach((c) => c.addEventListener('click', () => login(c.dataset.uid)));
+  const b = $('#setup-seed');
+  if (b) b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { await api('POST', '/setup/seed'); await loadMeta(); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+  });
+}
 
 // ───────────── 대시보드 ─────────────
 async function pageDashboard() {
   const d = await api('GET', '/dashboard');
   const st = S.meta.status;
-  const k = (key, label) => `<div class="kpi" onclick="location.hash='#/projects?status=${key}'"><div class="k">${label}</div><div class="v">${d.counts[key] || 0}</div></div>`;
+  const k = (key, label) => `<div class="kpi" onclick="go('#/projects?status=${key}')\"><div class="k">${label}</div><div class="v">${d.counts[key] || 0}</div></div>`;
   const tasks = d.myTasks.length
     ? `<ul class="list">${d.myTasks.map((t) => `<li><span>${t.urgent ? '🔴' : '🟡'}</span><div class="grow"><a href="#/projects/${t.projectId}"><b>${esc(t.label)}</b></a><div class="small muted">${esc(t.projectName)} · ${badge(st[t.status]?.label, st[t.status]?.color)}${S.user.role === 'ADMIN' ? ` · 담당: ${esc(roleLabel(t.role))}` : ''}</div></div></li>`).join('')}</ul>`
     : '<div class="empty">처리할 업무가 없습니다 👍</div>';
   const alerts = d.alerts.length ? d.alerts.map((a) => `<div class="alert ${a.level}">⚠️ <div><a href="#/projects/${a.projectId}"><b>${esc(a.projectName)}</b></a><br>${esc(a.text)}</div></div>`).join('') : '<div class="alert ok">✅ 누락 위험 경보가 없습니다.</div>';
-  const up = d.upcoming.length ? `<table class="tbl"><thead><tr><th>지도일</th><th>공사</th><th>회차</th><th>기관</th></tr></thead><tbody>${d.upcoming.map((u) => `<tr class="click" onclick="location.hash='#/projects/${u.projectId}'"><td class="nowrap">${esc(u.date)} ${esc(u.time || '')} <span class="small muted">D${diffDays(today(), u.date) >= 0 ? '-' + diffDays(today(), u.date) : '+' + -diffDays(today(), u.date)}</span></td><td>${esc(u.projectName)}</td><td>${u.round}회</td><td class="small">${esc(u.agency || '')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">예정된 기술지도가 없습니다.</div>';
+  const up = d.upcoming.length ? `<table class="tbl"><thead><tr><th>지도일</th><th>공사</th><th>회차</th><th>기관</th></tr></thead><tbody>${d.upcoming.map((u) => `<tr class="click" onclick="go('#/projects/${u.projectId}')\"><td class="nowrap">${esc(u.date)} ${esc(u.time || '')} <span class="small muted">D${diffDays(today(), u.date) >= 0 ? '-' + diffDays(today(), u.date) : '+' + -diffDays(today(), u.date)}</span></td><td>${esc(u.projectName)}</td><td>${u.round}회</td><td class="small">${esc(u.agency || '')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">예정된 기술지도가 없습니다.</div>';
   const lc = d.lastDailyCheck;
   $('#app').innerHTML = shell('대시보드', `
     <div class="alert info">👤 <div><b>${esc(S.user.name)}</b> (${esc(roleLabel(S.user.role))} · ${esc(orgName(S.user))}) 로 접속 중입니다. ${roleHelp(S.user.role)}</div></div>
     <div class="kpis">
-      <div class="kpi accent" onclick="location.hash='#/projects'"><div class="k">전체 공사</div><div class="v">${d.total}</div></div>
+      <div class="kpi accent" onclick="go('#/projects')\"><div class="k">전체 공사</div><div class="v">${d.total}</div></div>
       ${k('MONITORING', '단가 누계관리')}${k('DOCS_REQUESTED', st.DOCS_REQUESTED.label)}${k('DOCS_SUBMITTED', st.DOCS_SUBMITTED.label)}${k('ACTIVE', st.ACTIVE.label)}${k('EXTENSION', st.EXTENSION.label)}${k('CLOSED', st.CLOSED.label)}
     </div>
     <div class="grid g2">
@@ -211,7 +271,7 @@ function roleHelp(role) {
 // ───────────── 공사 목록(대상 공사 구분) ─────────────
 async function pageProjects() {
   const list = await api('GET', '/projects');
-  const q = new URLSearchParams((location.hash.split('?')[1]) || '');
+  const q = new URLSearchParams((S.route.split('?')[1]) || '');
   const f = { type: q.get('type') || '', judge: q.get('judge') || '', status: q.get('status') || '', kw: q.get('kw') || '' };
   const canCreate = ['PURCHASE', 'ADMIN'].includes(S.user.role);
   $('#app').innerHTML = shell('재해예방 기술지도 대상 공사 구분', `
@@ -257,7 +317,7 @@ async function pageProjects() {
         <td class="small">${esc(owner || '-')}</td>
         <td class="small nowrap">${c ? `${esc(c.nextDue)} ${c.level === 'overdue' ? badge('초과', 'red') : c.level === 'warn' ? badge('임박', 'orange') : ''}` : '-'}</td></tr>`;
       }).join('')}</tbody></table>` : '<div class="empty">조건에 맞는 공사가 없습니다.</div>';
-    $$('#tbl tr[data-id]').forEach((tr) => tr.addEventListener('click', () => { location.hash = `#/projects/${tr.dataset.id}`; }));
+    $$('#tbl tr[data-id]').forEach((tr) => tr.addEventListener('click', () => { go(`#/projects/${tr.dataset.id}`); }));
   };
   ['#f-type', '#f-judge', '#f-status'].forEach((s) => $(s).addEventListener('change', draw));
   $('#f-kw').addEventListener('input', draw);
@@ -363,7 +423,7 @@ function openRegister() {
           const p = await api('POST', '/projects', fd);
           close();
           toast(p.judgment.target ? `등록 완료 — 기술지도 대상으로 판정되어 관계자에게 자동 안내를 발송했습니다.` : `등록 완료 — ${p.statusLabel}`, 'ok');
-          location.hash = `#/projects/${p.id}`;
+          go(`#/projects/${p.id}`);
         } catch (e) { toast(e.message, 'err'); }
       });
     },
@@ -659,7 +719,7 @@ function renderActions(p) {
 
   $$('[data-act]', box).forEach((btn) => btn.addEventListener('click', async () => {
     const act = btn.dataset.act;
-    if (btn.dataset.confirm && !confirm(btn.dataset.confirm)) return;
+    if (btn.dataset.confirm && !(await askConfirm(btn.dataset.confirm))) return;
     const scope = btn.closest('.action-card');
     const fd = new FormData();
     $$('input, select, textarea', scope).forEach((el) => {
@@ -749,7 +809,7 @@ function projectCalendar(p) {
       const v = vis[ds];
       const vcls = v ? (v.status === 'SCHEDULED' ? 'visit' : v.status.startsWith('IMPROVEMENT') ? 'imp' : 'done') : '';
       const inP = p.guidancePeriod && ds >= p.guidancePeriod.start && ds <= p.guidancePeriod.end;
-      return `<div class="d ${cls} ${ds === today() ? 'today' : ''}" style="${inP ? '' : 'background:#fafbfc'}"><div class="n">${d}</div>${work.has(ds) ? '<span class="ev work">작업일</span>' : ''}${v ? `<span class="ev ${vcls}">${v.round}회 ${S.meta.visitStatus[v.status]}</span>` : ''}${p.cycle && ds === p.cycle.nextDue ? '<span class="ev imp">지도기한</span>' : ''}</div>`;
+      return `<div class="d ${cls} ${ds === today() ? 'today' : ''}" style="${inP ? '' : 'background:var(--subtle)'}"><div class="n">${d}</div>${work.has(ds) ? '<span class="ev work">작업일</span>' : ''}${v ? `<span class="ev ${vcls}">${v.round}회 ${S.meta.visitStatus[v.status]}</span>` : ''}${p.cycle && ds === p.cycle.nextDue ? '<span class="ev imp">지도기한</span>' : ''}</div>`;
     })}</div><div class="legend"><span><i style="background:var(--gray-bg)"></i>작업일(협력업체)</span><span><i style="background:var(--blue-bg)"></i>지도 예정</span><span><i style="background:var(--green-bg)"></i>지도 완료</span><span><i style="background:var(--orange-bg)"></i>보완 진행 / 지도기한</span><span>음영 = 기술지도 기간 외</span></div>`;
     $('#pc-prev').addEventListener('click', () => { ym = shiftMonth(ym, -1); draw(); });
     $('#pc-next').addEventListener('click', () => { ym = shiftMonth(ym, 1); draw(); });
@@ -759,7 +819,7 @@ function projectCalendar(p) {
 
 // ───────────── 단가계약 정산·누계 ─────────────
 async function pageSettlements() {
-  const year = new URLSearchParams(location.hash.split('?')[1] || '').get('year') || today().slice(0, 4);
+  const year = new URLSearchParams(S.route.split('?')[1] || '').get('year') || today().slice(0, 4);
   const d = await api('GET', `/settlements?year=${year}`);
   const can = ['PURCHASE', 'PARTNER_MGMT', 'ADMIN'].includes(S.user.role);
   const th = d.threshold;
@@ -780,7 +840,7 @@ async function pageSettlements() {
       <div class="bd np tbl-wrap"><table class="tbl small"><thead><tr><th>공사계약명</th><th>업체명</th><th class="num">계약금액</th>${Array.from({ length: 12 }, (_, i) => `<th class="num">${i + 1}월</th>`).join('')}<th class="num">누계</th><th style="min-width:120px">기준 대비</th><th>판정/상태</th></tr></thead><tbody>
       ${rows.map((r) => {
         const ratio = r.cumulative / th;
-        return `<tr class="click" onclick="location.hash='#/projects/${r.id}'"><td><b>${esc(r.name)}</b><div class="muted">${esc(r.contractNo)}</div></td><td>${esc(r.companyName)}</td><td class="num">${eok(r.amount)}</td>
+        return `<tr class="click" onclick="go('#/projects/${r.id}')\"><td><b>${esc(r.name)}</b><div class="muted">${esc(r.contractNo)}</div></td><td>${esc(r.companyName)}</td><td class="num">${eok(r.amount)}</td>
         ${Array.from({ length: 12 }, (_, i) => { const v = r.months[String(i + 1).padStart(2, '0')]; return `<td class="num">${v != null ? Math.round(v / 1e4).toLocaleString('ko-KR') : '<span class="muted">-</span>'}</td>`; }).join('')}
         <td class="num"><b>${Math.round(r.cumulative / 1e4).toLocaleString('ko-KR')}</b></td>
         <td><div class="bar ${ratio >= 1 ? 'over' : r.judgment?.warning ? 'warn' : ''}"><i style="width:${Math.min(100, ratio * 100)}%"></i></div>${(ratio * 100).toFixed(1)}%${r.judgment?.forecast && !r.judgment?.target ? `<div class="muted">예상 ${eok(r.judgment.forecast)}</div>` : ''}</td>
@@ -788,7 +848,7 @@ async function pageSettlements() {
       }).join('') || `<tr><td colspan="18" class="empty">단가계약 공사가 없습니다.</td></tr>`}
       </tbody></table></div><div class="bd small muted">금액 단위: 만원 (계약금액은 억원) · 행을 클릭하면 공사 상세로 이동</div></div>`);
   bindShell();
-  $('#yr').addEventListener('change', (e) => { location.hash = `#/settlements?year=${e.target.value}`; });
+  $('#yr').addEventListener('change', (e) => { go(`#/settlements?year=${e.target.value}`); });
   if (can) {
     $('#st-tpl').addEventListener('click', () => download('/settlements/template', '정산실적_양식.xlsx'));
     $('#st-up').addEventListener('click', async () => {
@@ -825,7 +885,7 @@ async function pageCalendar() {
     $('#c-body').innerHTML = `<div class="cal">${monthGrid(ym, (ds, d, cls) => `<div class="d ${cls} ${ds === today() ? 'today' : ''}"><div class="n">${d}</div>${(ev[ds] || []).map((e) => e.work ? `<a class="ev work" href="#/projects/${e.p.id}" title="${esc(e.p.name)}">작업 · ${esc(e.p.companyName)}</a>` : `<a class="ev ${e.v.status === 'SCHEDULED' ? 'visit' : e.v.status.startsWith('IMPROVEMENT') ? 'imp' : 'done'}" href="#/projects/${e.p.id}" title="${esc(e.p.name)} ${e.v.round}회차">${esc(e.v.time || '')} ${esc(e.p.name)}</a>`).join('')}</div>`)}</div>`;
   };
   const active = list.filter((p) => p.cycle);
-  $('#c-cycle').innerHTML = active.length ? `<table class="tbl"><thead><tr><th>공사</th><th>기관</th><th>기술지도 기간</th><th>직전 지도</th><th>다음 기한</th><th>예정일</th><th>상태</th></tr></thead><tbody>${active.map((p) => { const c = p.cycle; return `<tr class="click" onclick="location.hash='#/projects/${p.id}'"><td>${esc(p.name)}</td><td class="small">${esc(p.agencyName)}</td><td class="small nowrap">${esc(p.guidancePeriod.start)} ~ ${esc(p.guidancePeriod.end)}</td><td>${esc(c.last || '-')}</td><td><b>${esc(c.nextDue)}</b></td><td>${esc(c.upcoming || '미지정')}</td><td>${c.level === 'overdue' ? badge('주기 초과', 'red') : c.level === 'expired' ? badge('기간 경과', 'red') : c.level === 'warn' ? badge('일정 필요', 'orange') : badge('정상', 'green')}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty">진행 중인 기술지도가 없습니다.</div>';
+  $('#c-cycle').innerHTML = active.length ? `<table class="tbl"><thead><tr><th>공사</th><th>기관</th><th>기술지도 기간</th><th>직전 지도</th><th>다음 기한</th><th>예정일</th><th>상태</th></tr></thead><tbody>${active.map((p) => { const c = p.cycle; return `<tr class="click" onclick="go('#/projects/${p.id}')\"><td>${esc(p.name)}</td><td class="small">${esc(p.agencyName)}</td><td class="small nowrap">${esc(p.guidancePeriod.start)} ~ ${esc(p.guidancePeriod.end)}</td><td>${esc(c.last || '-')}</td><td><b>${esc(c.nextDue)}</b></td><td>${esc(c.upcoming || '미지정')}</td><td>${c.level === 'overdue' ? badge('주기 초과', 'red') : c.level === 'expired' ? badge('기간 경과', 'red') : c.level === 'warn' ? badge('일정 필요', 'orange') : badge('정상', 'green')}</td></tr>`; }).join('')}</tbody></table>` : '<div class="empty">진행 중인 기술지도가 없습니다.</div>';
   $('#c-prev').addEventListener('click', () => { ym = shiftMonth(ym, -1); draw(); });
   $('#c-next').addEventListener('click', () => { ym = shiftMonth(ym, 1); draw(); });
   $('#show-work').addEventListener('change', draw);
@@ -835,9 +895,9 @@ async function pageCalendar() {
 // ───────────── 알림 ─────────────
 async function pageNotifications() {
   const canAll = ['ADMIN', 'SAFETY', 'PARTNER_MGMT', 'PURCHASE'].includes(S.user.role);
-  const scope = new URLSearchParams(location.hash.split('?')[1] || '').get('scope') === 'all' && canAll ? 'all' : 'mine';
+  const scope = new URLSearchParams(S.route.split('?')[1] || '').get('scope') === 'all' && canAll ? 'all' : 'mine';
   const list = await api('GET', `/notifications?scope=${scope}`);
-  const ch = new URLSearchParams(location.hash.split('?')[1] || '').get('ch') || 'EMAIL';
+  const ch = new URLSearchParams(S.route.split('?')[1] || '').get('ch') || 'EMAIL';
   const rows = list.filter((n) => n.channel === ch);
   $('#app').innerHTML = shell('알림 (E-메일 · SMS)', `
     <div class="alert info">ℹ️ <div>DEMO 버전에서는 실제 메일/SMS를 발송하지 않고 아래와 같이 기록합니다. 사내 메일서버·SMS 게이트웨이 연동 시 동일 내용이 실제 발송됩니다.</div></div>
@@ -906,7 +966,7 @@ function pageFlow() {
 
 // ───────────── DEMO 운영 · 기준정보 ─────────────
 async function pageAdmin() {
-  if (S.user.role !== 'ADMIN') { location.hash = '#/dashboard'; return; }
+  if (S.user.role !== 'ADMIN') { go('#/dashboard'); return; }
   await loadMeta();
   const m = S.meta, s = m.settings;
   $('#app').innerHTML = shell('DEMO 운영 · 기준정보', `
@@ -974,18 +1034,26 @@ async function pageAdmin() {
   $('#nc-add').addEventListener('click', () => add('companies', { name: $('#nc-name').value, bizNo: $('#nc-biz').value }));
   $('#na-add').addEventListener('click', () => add('agencies', { name: $('#na-name').value, phone: $('#na-phone').value }));
   $('#reset').addEventListener('click', async () => {
-    if (!confirm('모든 데이터를 시연용 샘플로 초기화합니다. 계속하시겠습니까?')) return;
-    await api('POST', '/admin/reset'); await loadMeta(); toast('초기화 완료', 'ok'); location.hash = '#/dashboard'; render();
+    if (!(await askConfirm('모든 공사·자료·알림을 지우고 시연용 샘플 데이터로 다시 만듭니다.', '초기화'))) return;
+    await api('POST', '/admin/reset'); await loadMeta(); toast('초기화 완료', 'ok'); go('#/dashboard');
   });
 }
 
 // ───────────── 시작 ─────────────
+// 다른 사용자가 데이터를 바꾸면(공유 저장소) 입력 중이 아닐 때 화면을 새로 그린다
+window.__TG_onRemoteChange = async () => {
+  if (!S.meta || $('#modal-root').children.length) return;
+  const a = document.activeElement;
+  if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.id !== 'user-switch') return;
+  try { await loadMeta(); if (S.user) S.user = S.meta.users.find((u) => u.id === S.user.id) || S.user; render(); } catch { /* 무시 */ }
+};
+
 (async function init() {
   try {
+    if (window.__TG_LOCAL) await window.__TG_LOCAL.ready;
     await loadMeta();
-    const uid = localStorage.getItem('tg_user');
+    const uid = LS.get('tg_user');
     S.user = S.meta.users.find((u) => u.id === uid) || null;
-    if (!location.hash) location.hash = '#/dashboard';
     render();
   } catch (e) {
     $('#app').innerHTML = `<div class="login"><div class="alert danger">서버에 연결할 수 없습니다: ${esc(e.message)}</div></div>`;

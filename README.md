@@ -8,7 +8,15 @@
 
 ---
 
-## 1. 실행 방법
+## 0. 웹페이지로 바로 사용 (설치 불필요)
+
+claude.ai 웹페이지로 배포된 DEMO: **https://claude.ai/artifact/RrWyn5JFHs2Dyy1vfBZx6y**
+
+- 서버 없이 브라우저에서 동작하며, 데이터는 페이지의 공유 저장소에 보관되어 같은 주소로 접속한 사람 모두가 같은 데이터를 봅니다.
+- 다른 사람이 쓰려면 페이지 우측 상단 **공유(Share)** 에서 대상자를 추가하고, 데이터를 입력해야 하는 사람은 **참여자(Contributor) 이상** 권한을 주세요.
+- 웹페이지 다시 만들기: `node scripts/build-web.js` → `web/dist/tg-demo.html` (판정·업무흐름 코드는 `server/`와 동일한 소스를 사용)
+
+## 1. 실행 방법 (사내 PC/서버에서 직접 실행)
 
 ```bash
 # Node.js 18 이상
