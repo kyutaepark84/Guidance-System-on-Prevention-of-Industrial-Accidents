@@ -42,6 +42,21 @@ const UNIT = [
   '정산은 매월 말 작업실적에 따라 실시한다.',
 ];
 
+const TG = [
+  '재해예방 기술지도 계약서',
+  '',
+  '공 사 명 : 2공장 Cooling Water 배관 교체공사',
+  '건설공사 발주자 : ○○석유화학(주) 울산공장',
+  '건설공사 시공자 : 동해기전(주)',
+  '기술지도기관 : 한국재해예방기술원 울산센터',
+  `계약일자 : ${year}년 10월 25일`,
+  `기술지도 기간 : ${year}. 11. 1. ~ ${year + 1}. 1. 31.`,
+  '기술지도 횟수 : 총 7회 (15일에 1회 이상)',
+  '기술지도 대가 : 금 1,890,000원 (부가세 별도)',
+  '',
+  '위 건설공사에 대하여 산업안전보건법 제73조에 따른 재해예방 기술지도 계약을 체결한다.',
+];
+
 function xmlEsc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
 async function docx(lines, file) {
@@ -91,6 +106,8 @@ async function settlementXlsx(file) {
   await docx(GENERAL, path.join(OUT, '공사계약서_일반공사_샘플.docx'));
   await docx(UNIT, path.join(OUT, '공사계약서_단가계약_샘플.docx'));
   const ok = pdf(UNIT, path.join(OUT, '공사계약서_단가계약_샘플.pdf'));
+  fs.writeFileSync(path.join(OUT, '기술지도계약서_샘플.txt'), TG.join('\n'));
+  pdf(TG, path.join(OUT, '기술지도계약서_샘플.pdf'));
   await settlementXlsx(path.join(OUT, '단가계약_월별정산실적_샘플.xlsx'));
   console.log('샘플 생성 완료:', fs.readdirSync(OUT).join(', '), ok ? '' : '(Chromium 없음: PDF 생략)');
 })();

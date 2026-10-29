@@ -1,6 +1,9 @@
 'use strict';
 // 자동 안내(E-메일/SMS). DEMO에서는 실제로 발송하지 않고 '발송함'(notifications)에 기록하며,
 // 각 사용자의 알림함에서 확인할 수 있다. 사내 메일/SMS 게이트웨이 연동 시 deliver()만 교체한다.
+//
+// 수신자: 공사별로 지정된 역할별 담당자(contacts)에게 보낸다.
+//         담당자가 지정되지 않은 역할은 해당 소속(부서·협력업체·기관) 전체에게 보낸다.
 const store = require('./db');
 const { won } = require('./rules');
 
@@ -13,26 +16,44 @@ const ROLE_LABEL = {
   ADMIN: '시스템 관리자',
 };
 
-// 프로젝트 기준으로 역할별 수신자(사용자)를 찾는다.
-function recipients(project, roles) {
+// 공사에 지정된 역할별 담당자 ID (이전 데이터 호환: managerUserId, 등록한 구매 담당자)
+function contactOf(p, role) {
+  const c = (p.contacts || {})[role];
+  if (c) return c;
+  if (role === 'PARTNER_MGMT') return p.managerUserId || null;
+  return null;
+}
+
+// 지정 담당자가 그 역할·소속에 맞는지 확인
+function validContact(p, role, u) {
+  if (!u || u.active === false || u.role !== role) return false;
+  if (role === 'CONTRACTOR') return u.orgId === p.companyId;
+  if (role === 'AGENCY') return !!p.agencyId && u.orgId === p.agencyId;
+  return true;
+}
+
+// 소속 전체(담당자 미지정 시)
+function orgMembers(p, role) {
+  const users = store.get().users.filter((u) => u.role === role && u.active !== false);
+  if (role === 'PARTNER_MGMT') return users.filter((u) => u.orgId === p.deptId);
+  if (role === 'CONTRACTOR') return users.filter((u) => u.orgId === p.companyId);
+  if (role === 'AGENCY') return users.filter((u) => p.agencyId && u.orgId === p.agencyId);
+  return users;
+}
+
+function recipients(p, roles) {
   const db = store.get();
   const out = [];
-  const add = (u) => { if (u && u.active !== false && !out.some((x) => x.id === u.id)) out.push(u); };
+  const fallback = [];
+  const add = (u) => { if (u && !out.some((x) => x.id === u.id)) out.push(u); };
   for (const role of roles) {
-    const users = db.users.filter((u) => u.role === role);
-    if (role === 'PARTNER_MGMT') {
-      const mgr = users.find((u) => u.id === project.managerUserId);
-      add(mgr);
-      users.filter((u) => u.orgId === project.deptId).forEach(add);
-    } else if (role === 'CONTRACTOR') {
-      users.filter((u) => u.orgId === project.companyId).forEach(add);
-    } else if (role === 'AGENCY') {
-      users.filter((u) => project.agencyId && u.orgId === project.agencyId).forEach(add);
-    } else {
-      users.forEach(add); // 안전보건환경부서, 구매부서: 부서 전체
-    }
+    const u = db.users.find((x) => x.id === contactOf(p, role));
+    if (validContact(p, role, u)) { add(u); continue; }
+    const members = orgMembers(p, role);
+    if (members.length) fallback.push(role);
+    members.forEach(add);
   }
-  return out;
+  return { users: out, fallback };
 }
 
 function projectSummary(p) {
@@ -56,12 +77,12 @@ function deliver(rec) {
  * @param {object} p 프로젝트
  * @param {string} event 이벤트 코드
  * @param {string[]} roles 수신 역할
- * @param {{subject:string, body:string|function, sms:string}} msg  body가 함수면 (role)=>string
+ * @param {{subject:string, body:string|function, sms:string|function}} msg  함수면 (role)=>string
  */
 function send(p, event, roles, msg, today) {
   const db = store.get();
   const settings = db.settings || {};
-  const users = recipients(p, roles);
+  const { users, fallback } = recipients(p, roles);
   const sent = [];
   const now = new Date().toISOString();
   for (const u of users) {
@@ -78,7 +99,15 @@ function send(p, event, roles, msg, today) {
   }
   db.notifications.push(...sent);
   const missingRoles = roles.filter((r) => !users.some((u) => u.role === r));
-  return { count: users.length, recipients: users.map((u) => `${u.name}(${ROLE_LABEL[u.role]})`), missingRoles };
+  return { count: users.length, recipients: users.map((u) => `${u.name}(${ROLE_LABEL[u.role]})`), missingRoles, fallbackRoles: fallback };
 }
 
-module.exports = { send, recipients, ROLE_LABEL, projectSummary };
+// 발송 결과를 이력에 남길 문구
+function describe(r) {
+  let s = `수신 ${r.count}명: ${r.recipients.join(', ') || '-'}`;
+  if (r.fallbackRoles.length) s += ` / 담당자 미지정(소속 전체 발송): ${r.fallbackRoles.map((x) => ROLE_LABEL[x]).join(', ')}`;
+  if (r.missingRoles.length) s += ` / 수신자 없음: ${r.missingRoles.map((x) => ROLE_LABEL[x]).join(', ')}`;
+  return s;
+}
+
+module.exports = { send, recipients, contactOf, validContact, describe, ROLE_LABEL, projectSummary };

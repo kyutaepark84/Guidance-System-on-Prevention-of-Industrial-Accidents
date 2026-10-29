@@ -130,28 +130,32 @@ function parseKoreanAmount(str) {
 }
 
 // ───────────────────────── 날짜 파싱 ─────────────────────────
-
-const DATE_RE = /(\d{4})\s*(?:[.\-/]|년)\s*(\d{1,2})\s*(?:[.\-/]|월)\s*(\d{1,2})\s*(?:일|\.)?/g;
+// 2026.01.01 / 2026-1-1 / 2026/01/01 / 2026년 1월 1일 / 2026. 1. 1. / '26.01.01 / 20260101
+const DATE_RE = /(?:^|[^\d])((?:19|20)\d{2}|'?\d{2})\s*(?:[.\-/]|년)\s*(\d{1,2})\s*(?:[.\-/]|월)\s*(\d{1,2})(?!\d)\s*(?:일|\.)?|(?:^|[^\d])((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/g;
 
 function normDate(y, m, d) {
-  const mm = String(m).padStart(2, '0');
-  const dd = String(d).padStart(2, '0');
+  let yy = String(y).replace("'", '');
+  if (yy.length === 2) yy = `20${yy}`;
   if (+m < 1 || +m > 12 || +d < 1 || +d > 31) return null;
-  return `${y}-${mm}-${dd}`;
+  return `${yy}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-function datesIn(str) {
+function datesIn(str, { fourDigitOnly = false } = {}) {
   const out = [];
   let m;
   DATE_RE.lastIndex = 0;
-  while ((m = DATE_RE.exec(str))) {
-    const d = normDate(m[1], m[2], m[3]);
+  while ((m = DATE_RE.exec(String(str)))) {
+    const d = m[1] ? ((fourDigitOnly && m[1].replace("'", '').length !== 4) ? null : normDate(m[1], m[2], m[3])) : normDate(m[4], m[5], m[6]);
     if (d) out.push(d);
+    DATE_RE.lastIndex = Math.max(DATE_RE.lastIndex - 1, m.index + 1);
   }
   return out;
 }
 
 // ───────────────────────── 필드 추출 ─────────────────────────
+
+const escRe = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const spaced = (label) => label.split('').map(escRe).join('\\s*');
 
 function cleanValue(v) {
   return String(v || '')
@@ -163,30 +167,34 @@ function cleanValue(v) {
 
 // 라벨 다음에 오는 값(같은 줄)을 찾는다. 라벨 글자 사이 공백 허용("공 사 명")
 // 1차: "라벨 : 값" 형태(콜론 필수) / 2차: 줄 맨 앞의 라벨(표 형태, 콜론 없음)
-function labelValue(lines, labels) {
-  const esc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function labelMatches(lines, labels) {
+  const out = [];
   for (const strict of [true, false]) {
     for (const label of labels) {
-      const pat = label.split('').map(esc).join('\\s*');
+      const pat = spaced(label);
       const re = strict
-        ? new RegExp(`(?:^|[\\s|①-⑳0-9.)])${pat}\\s*(?:\\([^)]*\\))?\\s*[:：]\\s*(.*)$`)
+        ? new RegExp(`(?:^|[\\s|①-⑳0-9.)(])${pat}\\s*(?:\\([^)]*\\))?\\s*[:：]\\s*(.*)$`)
         : new RegExp(`^\\s*(?:[①-⑳]|\\d+[.)])?\\s*${pat}\\s*(?:\\([^)]*\\))?\\s+(.+)$`);
       for (let i = 0; i < lines.length; i++) {
         const m = re.exec(lines[i]);
         if (!m) continue;
         let v = cleanValue(m[1]);
         if (!v && lines[i + 1]) v = cleanValue(lines[i + 1]); // 표에서 값이 다음 줄에 있는 경우
-        if (v) return { value: v, line: lines[i].trim() };
+        if (v) out.push({ value: v, line: lines[i].trim(), index: i, label, strict });
       }
     }
   }
-  return null;
+  return out;
+}
+
+function labelValue(lines, labels) {
+  return labelMatches(lines, labels)[0] || null;
 }
 
 function findAmount(lines) {
   const labels = ['총계약금액', '계약금액', '공사금액', '도급금액', '계약총액', '총공사비', '연간계약금액', '추정계약금액'];
   for (const label of labels) {
-    const pat = label.split('').join('\\s*');
+    const pat = spaced(label);
     const re = new RegExp(pat);
     for (let i = 0; i < lines.length; i++) {
       if (!re.test(lines[i])) continue;
@@ -208,22 +216,59 @@ function findAmount(lines) {
   return null;
 }
 
-function findPeriod(lines) {
-  const labels = ['계약기간', '공사기간', '이행기간', '용역기간', '작업기간', '계약 기간'];
+const PERIOD_LABELS = ['계약기간', '공사기간', '이행기간', '용역기간', '작업기간', '수행기간', '공기', '납품기한', '계약유효기간'];
+const START_LABELS = ['착공일자', '착공예정일', '착공일', '공사시작일', '계약시작일', '계약개시일', '시작일', '개시일'];
+const END_LABELS = ['준공예정일자', '준공예정일', '준공일자', '준공일', '완공일', '공사종료일', '계약종료일', '계약만료일', '종료일', '만료일', '완료일'];
+const CONTRACT_DATE_LABELS = ['계약일자', '계약체결일', '계약일', '체결일자', '체결일'];
+
+function firstDateByLabels(lines, labels) {
   for (const label of labels) {
-    const re = new RegExp(label.split('').join('\\s*'));
+    const re = new RegExp(spaced(label));
     for (let i = 0; i < lines.length; i++) {
-      if (!re.test(lines[i])) continue;
-      const ds = datesIn(lines[i] + ' ' + (lines[i + 1] || ''));
-      if (ds.length >= 2) return { start: ds[0], end: ds[1], line: lines[i].trim() };
+      const pos = lines[i].search(re);
+      if (pos < 0) continue;
+      const d = datesIn(lines[i].slice(pos) + ' ' + (lines[i + 1] || ''))[0];
+      if (d) return { date: d, line: lines[i].trim() };
     }
   }
+  return null;
+}
+
+// 라벨 줄과 그 다음 몇 줄(표가 줄바꿈된 PDF)을 함께 본다
+function periodByLabels(lines, labels, contractDate) {
+  for (const label of labels) {
+    const re = new RegExp(spaced(label));
+    for (let i = 0; i < lines.length; i++) {
+      const pos = lines[i].search(re);
+      if (pos < 0) continue;
+      const own = lines[i].slice(pos);
+      const fromContract = /계약\s*(?:체결)?\s*일\s*(?:로)?\s*부터|체결일\s*부터/.test(own);
+      const ownDates = datesIn(own);
+      if (ownDates.length >= 2 && ownDates[0] <= ownDates[1]) return { start: ownDates[0], end: ownDates[1], line: lines[i].trim() };
+      // "계약일로부터 2026.12.31까지"
+      if (fromContract && ownDates.length === 1 && contractDate) return { start: contractDate, end: ownDates[0], line: lines[i].trim() };
+      if (fromContract) continue;
+      const ds = datesIn([own, lines[i + 1] || '', lines[i + 2] || '', lines[i + 3] || ''].join(' '));
+      if (ds.length >= 2 && ds[0] <= ds[1]) return { start: ds[0], end: ds[1], line: lines[i].trim() };
+    }
+  }
+  return null;
+}
+
+function findPeriod(lines, contractDate) {
+  const byLabel = periodByLabels(lines, PERIOD_LABELS, contractDate);
+  if (byLabel) return byLabel;
   // 착공일/준공일 별도 기재
-  const s = labelValue(lines, ['착공일자', '착공일', '착공예정일', '계약시작일']);
-  const e = labelValue(lines, ['준공예정일자', '준공일자', '준공예정일', '준공일', '완료일', '계약종료일']);
-  const sd = s && datesIn(s.value)[0];
-  const ed = e && datesIn(e.value)[0];
-  if (sd && ed) return { start: sd, end: ed, line: `${s.line} / ${e.line}` };
+  const s = firstDateByLabels(lines, START_LABELS);
+  const e = firstDateByLabels(lines, END_LABELS);
+  if (s && e && s.date <= e.date) return { start: s.date, end: e.date, line: `${s.line} / ${e.line}` };
+  // 라벨 없이 "날짜 ~ 날짜" 또는 "날짜부터 날짜까지"
+  for (let i = 0; i < lines.length; i++) {
+    const win = `${lines[i]} ${lines[i + 1] || ''}`;
+    if (!/[~∼～〜]|부터|까지|-\s*\d{4}/.test(win)) continue;
+    const ds = datesIn(win, { fourDigitOnly: true });
+    if (ds.length >= 2 && ds[0] < ds[1]) return { start: ds[0], end: ds[1], line: lines[i].trim() };
+  }
   return null;
 }
 
@@ -231,12 +276,65 @@ function stripTrailingNoise(v) {
   return v.replace(/\s*(?:\(인\)|\(서명\)|\(날인\)|인$).*$/, '').trim();
 }
 
-function parseContractText(text) {
-  const lines = String(text || '')
+const normCo = (s) => String(s || '').replace(/\(주\)|㈜|주식회사|\(유\)|유한회사|\s|[()]/g, '').toLowerCase();
+
+// 발주자(우리 회사) 이름은 업체명 후보에서 제외한다
+function isOwner(value, line, ownerNames) {
+  const v = normCo(value);
+  if (ownerNames.some((o) => o && v.includes(normCo(o)))) return true;
+  return /발\s*주\s*(?:자|처|사|기관)|도\s*급\s*인|\(\s*갑\s*\)|^\s*갑\s*[:：]/.test(line);
+}
+
+function cleanCompany(v) {
+  return stripTrailingNoise(String(v)
+    .replace(/^(?:\(?을\)?\s*)?(?:상\s*호|업\s*체\s*명|회\s*사\s*명|법\s*인\s*명)\s*[:：]?\s*/, '')
+    .replace(/\s*(?:대표이사|대표자|대표|사업자\s*등록\s*번호|사업자번호|주소|소재지|전화|TEL|성명).*$/i, '')
+    .replace(/[,;]+$/, ''));
+}
+
+const COMPANY_LABELS = ['수급인', '수급자', '계약상대자', '계약상대방', '업체명', '공급자', '시공자', '시공사', '상호', '회사명', '협력업체', '법인명'];
+
+function findCompany(lines, ownerNames) {
+  const cands = [];
+  // ① "(을)" 표기 블록: "(을) 상호: ○○(주)" / "을 : ○○(주)"
+  for (let i = 0; i < lines.length; i++) {
+    const m = /(?:^|\s|\()을\s*\)?\s*[:：]?\s*(.+)$/.exec(lines[i]);
+    if (m && /\(\s*을\s*\)|^\s*을\s*[:：]/.test(lines[i])) {
+      const v = cleanCompany(m[1]);
+      if (v && v.length >= 2) cands.push({ value: v, line: lines[i].trim(), score: 3 });
+      // 다음 줄에 상호가 오는 경우
+      const next = lines[i + 1] && /상\s*호|업\s*체\s*명|회\s*사\s*명/.test(lines[i + 1]) ? cleanCompany(lines[i + 1]) : '';
+      if (next) cands.push({ value: next, line: lines[i + 1].trim(), score: 3 });
+    }
+  }
+  // ② 라벨
+  for (const m of labelMatches(lines, COMPANY_LABELS)) {
+    const v = cleanCompany(m.value);
+    if (v && v.length >= 2) cands.push({ value: v, line: m.line, score: (m.strict ? 2 : 1) + (/수급|계약상대|을/.test(m.label) ? 1 : 0) });
+  }
+  // ③ 회사 형태 이름(○○(주), 주식회사 ○○)
+  const re = /((?:\(주\)|㈜|주식회사)\s*[가-힣A-Za-z0-9&]+(?:\s*[가-힣A-Za-z0-9&]+)?|[가-힣A-Za-z0-9&]+\s*(?:\(주\)|㈜|주식회사))/g;
+  lines.forEach((l) => {
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(l))) cands.push({ value: m[1].trim(), line: l.trim(), score: 0 });
+  });
+  const ok = cands.filter((c) => !isOwner(c.value, c.line, ownerNames));
+  ok.sort((a, b) => b.score - a.score);
+  return ok[0] || null;
+}
+
+function toLines(text) {
+  return String(text || '')
     .replace(/\r/g, '')
     .split('\n')
     .map((l) => l.replace(/\t/g, ' ').replace(/ /g, ' '))
     .filter((l) => l.trim());
+}
+
+function parseContractText(text, opts = {}) {
+  const ownerNames = opts.ownerNames || [];
+  const lines = toLines(text);
   const joined = lines.join('\n');
 
   const fields = {};
@@ -251,16 +349,11 @@ function parseContractText(text) {
   const no = /계\s*약\s*번\s*호\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9\-_/]{2,})/.exec(joined);
   if (no) { fields.contractNo = no[1]; evidence.contractNo = no[0]; }
 
-  const comp = labelValue(lines, ['업체명', '계약상대자', '수급인', '수급자', '상호', '회사명', '협력업체']);
-  if (comp) {
-    fields.companyName = stripTrailingNoise(comp.value.replace(/^(?:상\s*호|업체명|회사명)\s*[:：]\s*/, '').replace(/\s*(?:대표이사|대표자|대표|사업자등록번호|주소).*$/, ''));
-    evidence.companyName = comp.line;
-  } else {
-    const m = /((?:\(주\)|㈜|주식회사)\s*[가-힣A-Za-z0-9]+|[가-힣A-Za-z0-9]+\s*(?:\(주\)|㈜))/.exec(joined);
-    if (m) { fields.companyName = m[1].trim(); evidence.companyName = m[0]; }
-  }
+  const comp = findCompany(lines, ownerNames);
+  if (comp) { fields.companyName = comp.value; evidence.companyName = comp.line; }
 
-  const per = findPeriod(lines);
+  const cd = firstDateByLabels(lines, CONTRACT_DATE_LABELS);
+  const per = findPeriod(lines, cd && cd.date);
   if (per) { fields.startDate = per.start; fields.endDate = per.end; evidence.period = per.line; }
 
   const amt = findAmount(lines);
@@ -278,15 +371,46 @@ function parseContractText(text) {
   return { fields, evidence, missing, textPreview: joined.slice(0, 3000) };
 }
 
-async function analyzeContract(buf, filename) {
-  const text = await extractText(buf, filename);
-  if (!text || text.replace(/\s/g, '').length < 10) {
-    return {
-      fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], textPreview: '',
-      warning: '텍스트를 추출하지 못했습니다(스캔 이미지 PDF 등). 정보를 직접 입력해 주세요.',
-    };
+// 기술지도 계약서: 계약일자 / 기술지도 계약기간 / 기술지도 횟수
+function parseTgContractText(text) {
+  const lines = toLines(text);
+  const joined = lines.join('\n');
+  const fields = {};
+  const evidence = {};
+  const cd = firstDateByLabels(lines, CONTRACT_DATE_LABELS);
+  if (cd) { fields.contractDate = cd.date; evidence.contractDate = cd.line; }
+  const per = periodByLabels(lines, ['기술지도기간', '지도기간', '기술지도계약기간', '계약기간', '용역기간', '공사기간'], cd && cd.date) || findPeriod(lines, cd && cd.date);
+  if (per) { fields.guidanceStart = per.start; fields.guidanceEnd = per.end; evidence.period = per.line; }
+  const cnt = /(?:기\s*술\s*지\s*도\s*횟\s*수|지\s*도\s*횟\s*수|방\s*문\s*횟\s*수|총\s*지\s*도\s*횟\s*수|횟\s*수)\s*(?:\([^)]*\))?\s*[:：]?\s*(?:총\s*)?(\d{1,3})\s*회/.exec(joined)
+    || /(?:기술지도|지도)[^\n]{0,20}?(?:총\s*)?(\d{1,3})\s*회/.exec(joined);
+  if (cnt) { fields.plannedCount = Number(cnt[1]); evidence.plannedCount = cnt[0].trim(); }
+  if (!fields.contractDate) {
+    // 계약서 끝의 작성일("2026년 10월 1일")을 계약일로 본다
+    const all = datesIn(joined, { fourDigitOnly: true });
+    if (all.length) { fields.contractDate = all[all.length - 1]; evidence.contractDate = '(문서의 마지막 날짜)'; }
   }
-  return parseContractText(text);
+  const missing = ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'].filter((k) => fields[k] == null);
+  return { fields, evidence, missing, textPreview: joined.slice(0, 3000) };
 }
 
-module.exports = { analyzeContract, parseContractText, parseKoreanAmount, extractText, datesIn, cellText };
+async function readText(buf, filename) {
+  const text = await extractText(buf, filename);
+  if (!text || text.replace(/\s/g, '').length < 10) return null;
+  return text;
+}
+
+const NO_TEXT = '텍스트를 추출하지 못했습니다(스캔 이미지 PDF 등). 정보를 직접 입력해 주세요.';
+
+async function analyzeContract(buf, filename, opts = {}) {
+  const text = await readText(buf, filename);
+  if (!text) return { fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], textPreview: '', warning: NO_TEXT };
+  return parseContractText(text, opts);
+}
+
+async function analyzeTgContract(buf, filename) {
+  const text = await readText(buf, filename);
+  if (!text) return { fields: {}, evidence: {}, missing: ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'], textPreview: '', warning: NO_TEXT };
+  return parseTgContractText(text);
+}
+
+module.exports = { analyzeContract, analyzeTgContract, parseContractText, parseTgContractText, parseKoreanAmount, extractText, datesIn, cellText };

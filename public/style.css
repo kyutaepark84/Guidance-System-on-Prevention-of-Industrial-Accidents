@@ -351,3 +351,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); bor
   .quick { display: none; }
   .content { padding: 10px 16px 20px; }
 }
+
+/* ───────── Ver.2: 끌어다 놓기 첨부 · 등록 화면 구역 · 담당자 지정 ───────── */
+.dz-field .dz { display: flex; gap: 10px; align-items: flex-start; border: 1.5px dashed var(--line-strong); background: var(--panel); padding: 10px 12px; cursor: pointer; border-radius: 2px; }
+.dz-field .dz:hover, .dz-field .dz:focus { border-color: var(--brand); outline: none; }
+.dz-field .dz.over { background: var(--brand-2); border-color: var(--brand); }
+.dz-field.has-file .dz { border-style: solid; border-color: #7fb069; background: #f5fbf2; }
+.dz-ico { font-size: 18px; color: var(--brand); line-height: 1.2; }
+.dz-req { font-size: 11px; color: var(--red); font-weight: 700; }
+.dz-list { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; }
+.dz-list li { padding: 1px 0; }
+.form-sec { font-size: 13px; margin: 14px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line-2); }
+.action-card.plain { border: 0; padding: 0; margin: 0; background: transparent; }
+.action-card.inline { display: inline-flex; gap: 6px; align-items: center; border: 0; padding: 0; margin: 0 0 0 8px; background: transparent; }
+.new-contact summary { cursor: pointer; color: var(--link); margin-top: 4px; }
+.amount-hint { color: var(--brand-ink); font-weight: 600; }
+.tbl td.c, .tbl th.c { text-align: center; }
+#close-card { border-left: 3px solid #4f8a3a; }
+#ext-card { border-left: 3px solid var(--purple); }

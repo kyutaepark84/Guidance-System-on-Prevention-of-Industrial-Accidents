@@ -157,6 +157,8 @@ async function start() {
     loadLocal();
   }
   const st = store.get();
+  // 이전 버전(Ver.1) 데이터를 현재 구조로 변환하고 저장
+  if (st.users.length && wf.migrate(st) && !P.readOnly) store.save();
   if (st.users.length && !P.readOnly) {
     const last = st.meta.lastDailyCheck;
     if (!last || last.date !== wf.today()) wf.dailyCheck();

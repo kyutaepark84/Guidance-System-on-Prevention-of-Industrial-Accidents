@@ -3,12 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
-const ExcelJS = require('exceljs');
 const store = require('./db');
 const dates = require('./dates');
 const wf = require('./workflow');
-const notify = require('./notify');
-const { analyzeContract } = require('./extract');
+const { analyzeContract, analyzeTgContract } = require('./extract');
+const views = require('./views');
+const userimport = require('./userimport');
 const settlement = require('./settlement');
 const { seed } = require('./seed');
 
@@ -46,34 +46,7 @@ function auth(req, res, next) {
 const allow = (...roles) => (req, res, next) => (req.user.role === 'ADMIN' || roles.includes(req.user.role) ? next() : res.status(403).json({ error: '권한이 없습니다.' }));
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-function projectView(p, user, detail = false) {
-  const db = store.get();
-  const t = wf.today();
-  const allTasks = wf.tasks(p, t);
-  const mine = allTasks.filter((x) => user.role === 'ADMIN' || x.role === user.role);
-  const v = {
-    ...p,
-    history: detail ? p.history : undefined,
-    statusLabel: wf.STATUS[p.status]?.label || p.status,
-    statusColor: wf.STATUS[p.status]?.color,
-    step: wf.STATUS[p.status]?.step,
-    deptName: db.departments.find((d) => d.id === p.deptId)?.name || '',
-    managerName: db.users.find((u) => u.id === p.managerUserId)?.name || '',
-    agencyName: db.agencies.find((a) => a.id === p.agencyId)?.name || '',
-    cycle: wf.cycleInfo(p, t),
-    tasks: allTasks,
-    myTasks: mine,
-  };
-  if (detail) {
-    v.files = db.files.filter((f) => f.projectId === p.id).map((f) => ({ ...f, uploaderName: db.users.find((u) => u.id === f.uploadedBy)?.name || '' }));
-    v.settlements = db.settlements.filter((s) => s.projectId === p.id).sort((a, b) => a.month.localeCompare(b.month));
-    v.notifications = db.notifications.filter((n) => n.projectId === p.id && (canSeeAllMail(user) || n.toUserId === user.id)).slice(-200).reverse();
-    v.actions = wf.availableActions(p, user);
-  }
-  return v;
-}
-
-const canSeeAllMail = (u) => ['ADMIN', 'SAFETY', 'PARTNER_MGMT', 'PURCHASE'].includes(u.role);
+const { projectView, canSeeAllMail } = views;
 
 function getProject(req) {
   const p = store.get().projects.find((x) => x.id === req.params.id);
@@ -86,53 +59,13 @@ const pending = new Map(); // 계약서 분석 후 등록 대기 파일 (token �
 // ───────────── API ─────────────
 const api = express.Router();
 
-api.get('/meta', (req, res) => {
-  const db = store.get();
-  res.json({
-    today: wf.today(),
-    realToday: dates.todayReal(),
-    status: wf.STATUS,
-    visitStatus: wf.VISIT_STATUS,
-    roles: notify.ROLE_LABEL,
-    actions: Object.fromEntries(Object.entries(wf.ACTIONS).map(([k, a]) => [k, { label: a.label, roles: a.roles }])),
-    settings: wf.settings(),
-    departments: db.departments,
-    companies: db.companies,
-    agencies: db.agencies,
-    users: db.users.map(({ id, name, role, orgId, title, active }) => ({ id, name, role, orgId, title, active })),
-    lastDailyCheck: db.meta.lastDailyCheck || null,
-  });
-});
+api.get('/meta', (req, res) => res.json(views.meta({ storageMode: 'server' })));
 
 api.use(auth);
 
 api.get('/me', (req, res) => res.json(req.user));
 
-api.get('/dashboard', (req, res) => {
-  const db = store.get();
-  const t = wf.today();
-  const visible = db.projects.filter((p) => wf.canSee(req.user, p));
-  const counts = {};
-  for (const p of visible) counts[p.status] = (counts[p.status] || 0) + 1;
-  const myTasks = [];
-  const alerts = [];
-  for (const p of visible) {
-    for (const k of wf.tasks(p, t)) {
-      if (req.user.role === 'ADMIN' || k.role === req.user.role) myTasks.push({ projectId: p.id, projectName: p.name, status: p.status, ...k });
-    }
-    const c = wf.cycleInfo(p, t);
-    if (c && c.level === 'overdue') alerts.push({ level: 'danger', projectId: p.id, projectName: p.name, text: `기술지도 주기 초과 (기한 ${c.nextDue}) — 누락 위험` });
-    if (c && c.endIn >= 0 && c.endIn <= wf.settings().endNoticeDays && p.status === 'ACTIVE') alerts.push({ level: 'warn', projectId: p.id, projectName: p.name, text: `기술지도 기간 만료 D-${c.endIn} (${p.guidancePeriod.end})` });
-    if (c && c.endIn < 0) alerts.push({ level: 'danger', projectId: p.id, projectName: p.name, text: `기술지도 기간 경과 — 종결/연장 미조치` });
-    if (p.status === 'MONITORING' && p.judgment?.warning) alerts.push({ level: 'warn', projectId: p.id, projectName: p.name, text: `단가계약 누계 ${(p.judgment.ratio * 100).toFixed(1)}% — 기준 근접` });
-    if (p.status === 'DOCS_REQUESTED' && !p.agencyId) alerts.push({ level: 'warn', projectId: p.id, projectName: p.name, text: '기술지도기관 미지정' });
-  }
-  const upcoming = [];
-  for (const p of visible) for (const v of p.visits || []) if (v.status === 'SCHEDULED') upcoming.push({ projectId: p.id, projectName: p.name, date: v.plannedDate, time: v.time, round: v.round, agency: db.agencies.find((a) => a.id === p.agencyId)?.name });
-  upcoming.sort((a, b) => a.date.localeCompare(b.date));
-  const unread = db.notifications.filter((n) => n.toUserId === req.user.id && !n.read && n.channel === 'EMAIL').length;
-  res.json({ today: t, counts, total: visible.length, myTasks, alerts, upcoming: upcoming.slice(0, 10), unread, lastDailyCheck: db.meta.lastDailyCheck });
-});
+api.get('/dashboard', (req, res) => res.json(views.dashboard(req.user)));
 
 api.get('/projects', (req, res) => {
   const db = store.get();
@@ -148,7 +81,7 @@ api.post('/contracts/analyze', allow('PURCHASE'), upload.single('file'), wrap(as
   if (!req.file) throw new wf.WfError('계약서 파일을 선택해 주세요.');
   let result;
   try {
-    result = await analyzeContract(req.file.buffer, req.file.originalname);
+    result = await analyzeContract(req.file.buffer, req.file.originalname, { ownerNames: wf.settings().ownerCompanyNames });
   } catch (e) {
     result = { fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], warning: e.message };
   }
@@ -162,6 +95,16 @@ api.post('/contracts/analyze', allow('PURCHASE'), upload.single('file'), wrap(as
     result.preview = judge({ ...f, id: '_preview' }, [], wf.settings(), wf.today());
   }
   res.json({ ...result, token, fileName: req.file.originalname });
+}));
+
+// 기술지도 계약서 분석: 계약일자 / 기술지도 계약기간 / 횟수
+api.post('/tg-contracts/analyze', allow('AGENCY'), upload.single('file'), wrap(async (req, res) => {
+  if (!req.file) throw new wf.WfError('기술지도 계약서 파일을 선택해 주세요.');
+  try {
+    res.json(await analyzeTgContract(req.file.buffer, req.file.originalname));
+  } catch (e) {
+    res.json({ fields: {}, evidence: {}, missing: ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'], warning: e.message });
+  }
 }));
 
 // 공사 등록 (2단계: 확인한 정보로 생성)
@@ -197,23 +140,7 @@ api.get('/files/:id', (req, res) => {
 });
 
 // 단가 정산실적
-api.get('/settlements', (req, res) => {
-  const db = store.get();
-  const t = wf.today();
-  const year = String(req.query.year || t.slice(0, 4));
-  const units = db.projects.filter((p) => p.type === 'UNIT_PRICE' && wf.canSee(req.user, p));
-  res.json({
-    year,
-    threshold: wf.settings().amountThreshold,
-    rows: units.map((p) => {
-      const ss = db.settlements.filter((s) => s.projectId === p.id && s.month.startsWith(year));
-      const months = {};
-      for (const s of ss) months[s.month.slice(5, 7)] = s.amount;
-      const cum = ss.reduce((a, s) => a + s.amount, 0);
-      return { ...projectView(p, req.user), months, cumulative: cum };
-    }),
-  });
-});
+api.get('/settlements', (req, res) => res.json(views.settlementsView(req.user, String(req.query.year || wf.today().slice(0, 4)))));
 
 api.post('/settlements/upload', allow('PURCHASE', 'PARTNER_MGMT'), upload.single('file'), wrap(async (req, res) => {
   if (!req.file) throw new wf.WfError('정산실적 파일을 선택해 주세요.');
@@ -265,26 +192,9 @@ api.post('/notifications/read', (req, res) => {
 
 // 엑셀 내보내기
 api.get('/export/projects.xlsx', wrap(async (req, res) => {
-  const db = store.get();
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('기술지도 대상 공사');
-  ws.columns = [
-    ['계약번호', 14], ['공사계약명', 40], ['구분', 10], ['업체명', 18], ['계약시작', 12], ['계약종료', 12], ['계약금액', 15],
-    ['누계정산(당해)', 15], ['판정', 10], ['상태', 22], ['담당부서', 12], ['기술지도기관', 26], ['지도기간', 24], ['지도 실시', 10], ['다음 지도기한', 14], ['판정근거', 80],
-  ].map(([header, width]) => ({ header, width }));
-  ws.getRow(1).font = { bold: true };
-  for (const p of db.projects.filter((x) => wf.canSee(req.user, x))) {
-    const v = projectView(p, req.user);
-    ws.addRow([p.contractNo, p.name, p.type === 'UNIT_PRICE' ? '단가계약' : '일반', p.companyName, p.startDate, p.endDate, p.amount,
-      p.type === 'UNIT_PRICE' ? p.judgment?.cumulative?.currentYearAmount || 0 : '', p.judgment?.target ? '대상' : '비대상', v.statusLabel, v.deptName, v.agencyName,
-      p.guidancePeriod ? `${p.guidancePeriod.start}~${p.guidancePeriod.end}` : '', (p.visits || []).filter((x) => ['DONE', 'IMPROVEMENT_REQUESTED', 'IMPROVEMENT_SUBMITTED', 'CLOSED_OK'].includes(x.status)).length || '',
-      v.cycle?.nextDue || '', p.judgment?.reason || '']);
-  }
-  ws.getColumn(7).numFmt = '#,##0';
-  ws.getColumn(8).numFmt = '#,##0';
-  const buf = await wb.xlsx.writeBuffer();
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`기술지도_대상공사_${wf.today()}.xlsx`)}`);
-  res.type('xlsx').send(Buffer.from(buf));
+  const f = await views.exportProjects(req.user);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(f.filename)}`);
+  res.type('xlsx').send(Buffer.from(f.data));
 }));
 
 // ───────────── 관리자(DEMO 운영) ─────────────
@@ -292,19 +202,9 @@ const admin = express.Router();
 admin.use(allow('ADMIN'));
 
 admin.put('/settings', (req, res) => {
-  const db = store.get();
-  const s = req.body || {};
-  const num = (k, min) => { if (k in s) { const n = Number(s[k]); if (!(n >= min)) throw new wf.WfError(`${k} 값이 올바르지 않습니다.`); db.settings[k] = n; } };
-  num('amountThreshold', 0); num('periodMonths', 0); num('warnRatio', 0); num('endNoticeDays', 0); num('cycleDays', 1); num('cycleRemindDays', 0);
-  for (const k of ['notifyEmail', 'notifySms']) if (k in s) db.settings[k] = !!s[k];
-  if ('defaultAgencyId' in s) db.settings.defaultAgencyId = s.defaultAgencyId || null;
-  if ('demoToday' in s) {
-    if (s.demoToday && !dates.isValid(s.demoToday)) throw new wf.WfError('데모 기준일 형식(YYYY-MM-DD)을 확인해 주세요.');
-    db.settings.demoToday = s.demoToday || null;
-  }
-  const r = wf.dailyCheck();
+  const r = views.applySettings(req.body || {});
   store.save();
-  res.json({ settings: wf.settings(), dailyCheck: r });
+  res.json(r);
 });
 
 admin.post('/advance', (req, res) => {
@@ -322,15 +222,24 @@ admin.post('/reset', (req, res) => {
   res.json({ ok: true });
 });
 
+// 담당자 일괄 Upload / 양식
+admin.post('/users/upload', upload.single('file'), wrap(async (req, res) => {
+  if (!req.file) throw new wf.WfError('담당자 파일을 선택해 주세요.');
+  let r;
+  try { r = await userimport.importUsers(req.file.buffer, req.file.originalname); } catch (e) { throw new wf.WfError(e.message); }
+  store.save();
+  res.json(r);
+}));
+
+admin.get('/users/template', wrap(async (req, res) => {
+  const buf = await userimport.usersTemplate();
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent('담당자_일괄등록_양식.xlsx')}`);
+  res.type('xlsx').send(Buffer.from(buf));
+}));
+
 for (const kind of ['users', 'companies', 'agencies', 'departments']) {
   admin.post(`/${kind}`, (req, res) => {
-    const db = store.get();
-    const b = req.body || {};
-    if (!b.name) throw new wf.WfError('이름을 입력해 주세요.');
-    if (kind === 'users' && !notify.ROLE_LABEL[b.role]) throw new wf.WfError('역할을 선택해 주세요.');
-    let rec = b.id && db[kind].find((x) => x.id === b.id);
-    if (rec) Object.assign(rec, b);
-    else { rec = { ...b, id: store.id(kind.slice(0, 2)), active: true }; db[kind].push(rec); }
+    const rec = views.upsertMaster(kind, req.body || {});
     store.save();
     res.json(rec);
   });
@@ -351,6 +260,9 @@ function start() {
   if (fresh || process.env.TG_RESEED === '1') {
     seed();
     console.log('DEMO 데이터를 생성했습니다.');
+  } else if (wf.migrate(store.get())) {
+    store.save();
+    console.log('데이터를 Ver.2 구조로 변환했습니다.');
   }
   // 일일 점검: 기동 시 + 매시간(기준일이 바뀐 경우에만 재실행)
   wf.dailyCheck();

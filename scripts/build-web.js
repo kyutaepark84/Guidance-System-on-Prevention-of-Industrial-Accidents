@@ -15,6 +15,8 @@ const MODULES = {
   extract: 'server/extract.js',
   settlement: 'server/settlement.js',
   seed: 'server/seed.js',
+  views: 'server/views.js',
+  userimport: 'server/userimport.js',
   db: 'web/db.js',
   pdftext: 'web/pdftext.js',
   docmap: 'web/docmap.js',
