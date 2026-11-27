@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>기술지도 업무 흐름 안내</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+<style>
+/* 레이아웃: 왼쪽 단계 목록 + 오른쪽 화면 재생 무대. 자동 재생(단계별 진행 막대) */
+:root {
+  --bg: #F4F2EE; --panel: #FFFDF9; --stage: #E7E2D9; --ink: #1E2833; --soft: #586373; --line: #D9D3C8;
+  --acc: #C9561A; --acc-ink: #FFFFFF;
+  --r-pur: #FBE1CF; --r-part: #DCEBD5; --r-con: #D3E7EE; --r-ag: #E5DCF2; --r-safe: #DAE4F4; --r-ink: #1E2833;
+  --font: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #161C23; --panel: #1F2730; --stage: #0F1419; --ink: #ECE8E1; --soft: #A9B3BF; --line: #33404D;
+  --acc: #F08A3C; --acc-ink: #1A1209;
+  --r-pur: #5A3A26; --r-part: #31472B; --r-con: #24434E; --r-ag: #3D3352; --r-safe: #2B3A55; --r-ink: #F2EEE7;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #161C23; --panel: #1F2730; --stage: #0F1419; --ink: #ECE8E1; --soft: #A9B3BF; --line: #33404D;
+  --acc: #F08A3C; --acc-ink: #1A1209;
+  --r-pur: #5A3A26; --r-part: #31472B; --r-con: #24434E; --r-ag: #3D3352; --r-safe: #2B3A55; --r-ink: #F2EEE7;
+  color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 15px; line-height: 1.55; word-break: keep-all; }
+.wrap { max-width: 1380px; margin: 0 auto; padding-block: 20px 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; color: var(--acc); }
+h1 { margin: 2px 0 0; font-size: clamp(20px, 2.4vw, 28px); font-weight: 900; text-wrap: balance; }
+.ctrl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 7px 14px; }
+button:hover { border-color: var(--acc); }
+button:focus-visible, .step:focus-visible { outline: 3px solid var(--acc); outline-offset: 2px; }
+button.primary { background: var(--acc); color: var(--acc-ink); border-color: var(--acc); font-weight: 700; min-width: 96px; }
+select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
+nav { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px; align-self: start; }
+.phase { font-size: 12px; font-weight: 700; color: var(--soft); padding: 10px 10px 4px; letter-spacing: .04em; }
+.step { display: grid; grid-template-columns: 44px 1fr; gap: 6px; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px 8px; border-radius: 8px; }
+.step .n { white-space: nowrap; font-weight: 900; color: var(--soft); font-variant-numeric: tabular-nums; }
+.step .t { font-weight: 500; font-size: 14px; }
+.step .w { display: block; font-size: 12px; color: var(--soft); }
+.step.on { background: var(--stage); }
+.step.on .n { color: var(--acc); }
+.step.done .n::after { content: ' ✓'; font-size: 11px; }
+main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--acc); }
+.stage { background: var(--stage); border-radius: 12px; padding: 16px; height: min(62vh, 620px); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.stage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,.18); transition: opacity .45s ease, transform .6s ease; }
+.stage img.out { opacity: 0; transform: translateY(10px); }
+.info { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px); gap: 18px; }
+.info h2 { margin: 6px 0 6px; font-size: 21px; text-wrap: balance; }
+.info p { margin: 0; color: var(--soft); max-width: 65ch; }
+.role { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 12px; border-radius: 20px; color: var(--r-ink); }
+.pur { background: var(--r-pur); } .part { background: var(--r-part); } .con { background: var(--r-con); } .ag { background: var(--r-ag); } .safe { background: var(--r-safe); }
+.auto { border-left: 4px solid var(--acc); padding: 4px 0 4px 12px; }
+.auto b { display: block; color: var(--acc); font-size: 13px; }
+.auto span { font-size: 14px; }
+.count { font-size: 13px; color: var(--soft); font-variant-numeric: tabular-nums; }
+footer { margin-top: 14px; font-size: 12px; color: var(--soft); }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  nav { display: flex; overflow-x: auto; gap: 4px; }
+  .phase { display: none; }
+  .step { min-width: 150px; }
+  .stage { height: 46vh; padding: 8px; }
+  .info { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .stage img { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <div class="eyebrow">재해예방 기술지도 관리시스템 · DEMO Ver.2</div>
+    <h1>신규 계약부터 종결까지 업무 흐름</h1>
+  </div>
+  <div class="ctrl">
+    <button id="prev" aria-label="이전 단계">◀ 이전</button>
+    <button id="play" class="primary">❚❚ 일시정지</button>
+    <button id="next" aria-label="다음 단계">다음 ▶</button>
+    <label class="count" for="speed">속도</label>
+    <select id="speed"><option value="10000">느리게</option><option value="7000" selected>보통</option><option value="4500">빠르게</option></select>
+  </div>
+</header>
+<div class="layout">
+  <nav id="nav" aria-label="단계 목록"></nav>
+  <main>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <div class="stage"><img id="shot" alt=""></div>
+    <div class="info">
+      <div>
+        <span id="role" class="role"></span> <span id="count" class="count"></span>
+        <h2 id="title"></h2>
+        <p id="desc"></p>
+      </div>
+      <div class="auto"><b id="autoh"></b><span id="auto"></span></div>
+    </div>
+  </main>
+</div>
+<footer>예시 공사: PE공장 반응기(R-201) 정비공사 · 5.2억 · 2026.11.10~2027.3.31 (진행 중 2개월 연장 후 종결). 결재·비용 정산은 DEMO 범위에서 제외. 키보드 ←/→ 이동, 스페이스 재생/정지.</footer>
+</div>
+<script>
+var STEPS = [
+  { ph: '정상 진행', img: 's06', role: ['pur', '구매부서'], t: '신규 계약 자동 등록', w: '계약서 업로드 → 자동 추출',
+    d: '계약서(PDF·DOCX·HWPX)를 끌어다 놓으면 공사명·업체·기간·금액이 채워집니다. 노란 칸은 자동 추출값이며 근거 문장이 함께 표시됩니다. 계약서가 없으면 ‘직접 입력’으로 수동 등록합니다.',
+    ah: '자동 판정', a: '공사기간·금액 기준으로 기술지도 대상 여부를 바로 보여줍니다.' },
+  { img: 's22', role: ['pur', '구매부서'], t: '스캔 계약서는 OCR로', w: '글자 없는 PDF·사진',
+    d: '스캔본은 자동으로 문자 인식(OCR)으로 전환하고 신뢰도와 소요 시간을 표시합니다. 이름·번호는 잘못 읽힐 수 있어(예: TC → 10) 원본과 대조 후 등록합니다.',
+    ah: '자동 처리', a: '문서는 브라우저 안에서 처리하며 외부로 보내지 않습니다.' },
+  { img: 's08', role: ['con', '협력업체'], t: '대상 판정 즉시 안내', w: '메일·문자 자동 발송',
+    d: '대상으로 판정되면 상태가 ‘서류 제출 대기’로 바뀌고, 지정된 협력업체·기관·관리부서 담당자에게 안내가 나갑니다. 담당자를 정하지 않은 역할은 소속 전체가 받습니다.',
+    ah: '상태 변경', a: '미대상 → 서류 제출 대기' },
+  { img: 's09', role: ['con', '협력업체'], t: '산재보험 서류 제출', w: '가입증명서 업로드',
+    d: '업무 처리 카드에 산재보험 가입증명서를 올리고 제출합니다. 제출 서류는 관계 부서가 공사 상세의 ‘제출 서류’에서 열람·내려받기 합니다.',
+    ah: '상태 변경 · 자동 안내', a: '기술지도 계약서 제출 대기. 기술지도기관에 계약서 제출 요청' },
+  { img: 's10', role: ['ag', '기술지도기관'], t: '기술지도 계약서 검토·제출', w: '계약 조건 자동 추출',
+    d: '계약서를 올리면 계약일·지도기간·지도 횟수를 읽어 채웁니다. 확인·수정 후 노동부 제출 여부를 체크하고 제출하면 기술지도가 개시됩니다.',
+    ah: '상태 변경', a: '진행 중. 15일 주기로 다음 지도 기한 계산 시작' },
+  { img: 's11', role: ['con', '협력업체'], t: '월별 작업일 지정', w: '달력에서 선택',
+    d: '달력에서 작업일을 눌러 선택하거나 ‘월별 주중 모두 선택’으로 한 번에 지정합니다. 기술지도 기간 안의 날짜만 고를 수 있습니다.',
+    ah: '자동 안내', a: '저장하면 기술지도기관에 작업일이 안내됩니다.' },
+  { img: 's12', role: ['ag', '기술지도기관'], t: '지도일 선정', w: '작업일 중에서 선택',
+    d: '작업일 목록에서 지도일·방문시간·지도요원을 지정합니다. 늦은 날을 먼저 잡아도 회차는 날짜순으로 자동 정렬됩니다.',
+    ah: '자동 안내', a: '지도일이 정해지면 협력업체·관리부서에 안내합니다.' },
+  { img: 's13', role: ['ag', '기술지도기관'], t: '지도 실시·결과보고', w: '결과보고서 업로드',
+    d: '지도를 마치면 실시일과 결과보고서를 올려 해당 회차를 완료합니다. 기한 안에 못 한 경우 미실시 사유를 선택해 입력합니다.',
+    ah: '자동 처리', a: '실시 이력과 다음 지도 기한이 갱신됩니다.' },
+  { img: 's14b', role: ['safe', '모든 관계자'], t: '진행 현황 달력', w: '작업일·지도일 한눈에',
+    d: '공사 상세의 달력에 작업일, 지도 예정, 실시 결과가 모입니다. 지도 간격이 15일을 넘으면 공백으로 표시됩니다.',
+    ah: '같은 화면', a: '부서마다 따로 묻지 않고 한 화면에서 확인합니다.' },
+  { ph: '연장과 종결', img: 's15', role: ['part', '협력업체 관리부서'], t: '기간 연장 요청', w: '연장 사유 입력',
+    d: '공기가 늘어나면 연장 사유를 적고 ‘기간 연장 절차 시작’을 누릅니다. 이후 ① 구매 계약서 갱신 → ② 협력업체 서류 → ③ 기관 추가계약서 순으로 진행됩니다.',
+    ah: '사전 안내', a: '종료 전 일반공사 D-10, 단가계약 D-30에 자동 안내' },
+  { img: 's16', role: ['pur', '구매부서'], t: '연장 ① 계약서 갱신', w: '종료일·금액 변경',
+    d: '변경 계약서를 올리고 새 종료일과 계약금액을 입력합니다. 금액은 억 단위로 바로 표시됩니다.',
+    ah: '자동 안내', a: '협력업체에 연장 서류 제출 요청' },
+  { img: 's17', role: ['con', '협력업체'], t: '연장 ② 추가 서류 제출', w: '산재증명서 갱신',
+    d: '구매부서의 갱신 계약서가 자동 첨부됩니다. 산재가입증명서 갱신(필수)과 납품연기원(해당 시)을 올리고 연장계약 종료일을 확인합니다.',
+    ah: '자동 안내', a: '기술지도기관에 추가계약서 제출 요청' },
+  { img: 's18', role: ['ag', '기술지도기관'], t: '연장 ③ 추가계약서', w: '연장 완료',
+    d: '기술지도 추가계약서를 올립니다. 연장 종료일은 협력업체 연장계약 종료일이 기본값으로 채워집니다.',
+    ah: '상태 변경', a: '연장 진행 → 진행 중. 늘어난 기간까지 지도 계속' },
+  { img: 's19', role: ['part', '협력업체 관리부서'], t: '현장공사 완료 → 종결', w: '확인 후 종결',
+    d: '현장공사 완료일을 입력하고 종결을 누르면 확인 창이 한 번 더 나타납니다.',
+    ah: '자동 안내', a: '관계자 전원에게 종결을 안내하고 기한 안내를 멈춥니다.' },
+  { img: 's20', role: ['part', '협력업체 관리부서'], t: '종결된 공사', w: '이력·서류 보관',
+    d: '종결 후에도 등록부터 연장, 종결까지의 처리 이력과 모든 제출 서류를 공사 상세에서 확인할 수 있습니다.',
+    ah: '보관', a: '처리 이력·제출 서류가 그대로 남습니다.' },
+  { img: 's21', role: ['safe', '안전보건환경부서'], t: '전체 현황 모니터링', w: '대시보드',
+    d: '상태별 공사 수, 다가오는 지도 일정, 종료 임박·기한 경과 건을 한 화면에서 봅니다.',
+    ah: '매일 자동 점검', a: '기한 임박·경과 건을 담당자에게 자동 안내합니다.' }
+];
+var cur = 0, playing = true, dur = 7000, t0 = 0, raf = 0, elapsed = 0;
+var $ = function (id) { return document.getElementById(id); };
+var nav = $('nav'), img = $('shot');
+STEPS.forEach(function (s, i) {
+  if (s.ph) { var h = document.createElement('div'); h.className = 'phase'; h.textContent = s.ph; nav.appendChild(h); }
+  var b = document.createElement('button'); b.className = 'step'; b.type = 'button';
+  b.innerHTML = '<span class="n">' + String(i + 1).padStart(2, '0') + '</span><span><span class="t"></span><span class="w"></span></span>';
+  b.querySelector('.t').textContent = s.t; b.querySelector('.w').textContent = s.role[1] + ' · ' + s.w;
+  b.addEventListener('click', function () { show(i); });
+  nav.appendChild(b);
+});
+var btns = nav.querySelectorAll('.step');
+STEPS.forEach(function (s) { var p = new Image(); p.src = 'img/' + s.img + '.png'; });
+function show(i) {
+  cur = (i + STEPS.length) % STEPS.length; elapsed = 0; t0 = performance.now();
+  var s = STEPS[cur];
+  img.classList.add('out');
+  setTimeout(function () { img.src = 'img/' + s.img + '.png'; img.alt = s.t + ' 화면'; img.classList.remove('out'); }, 200);
+  $('role').className = 'role ' + s.role[0]; $('role').textContent = s.role[1];
+  $('count').textContent = (cur + 1) + ' / ' + STEPS.length;
+  $('title').textContent = s.t; $('desc').textContent = s.d; $('autoh').textContent = s.ah; $('auto').textContent = s.a;
+  btns.forEach(function (b, k) { b.classList.toggle('on', k === cur); b.classList.toggle('done', k < cur); if (k === cur) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current'); });
+  var on = btns[cur]; if (on.scrollIntoView && window.innerWidth <= 860) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+}
+function tick(now) {
+  if (playing) {
+    var p = elapsed + (now - t0);
+    $('bar').style.width = Math.min(100, p / dur * 100) + '%';
+    if (p >= dur) show(cur + 1);
+  }
+  raf = requestAnimationFrame(tick);
+}
+function setPlay(v) {
+  if (v === playing) return;
+  if (!v) elapsed += performance.now() - t0; else t0 = performance.now();
+  playing = v; $('play').textContent = v ? '❚❚ 일시정지' : '▶ 재생';
+}
+$('play').addEventListener('click', function () { setPlay(!playing); });
+$('prev').addEventListener('click', function () { show(cur - 1); });
+$('next').addEventListener('click', function () { show(cur + 1); });
+$('speed').addEventListener('change', function (e) { dur = +e.target.value; });
+document.addEventListener('keydown', function (e) {
+  if (e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowRight') show(cur + 1);
+  else if (e.key === 'ArrowLeft') show(cur - 1);
+  else if (e.key === ' ') { e.preventDefault(); setPlay(!playing); }
+});
+if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) setPlay(false);
+show(0); raf = requestAnimationFrame(tick);
+</script>
+</body>
+</html>
