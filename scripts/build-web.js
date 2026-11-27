@@ -95,12 +95,18 @@ const OCR_FILES = {
   'tesseract.min.js': 'node_modules/tesseract.js/dist/tesseract.min.js',
   'worker.min.js': 'node_modules/tesseract.js/dist/worker.min.js',
   'tesseract-core-simd-lstm.wasm.js': 'node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js',
-  'kor.traineddata.gz': 'node_modules/@tesseract.js-data/kor/4.0.0_best_int/kor.traineddata.gz',
-  'eng.traineddata.gz': 'node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz',
+};
+// 학습데이터(.gz)는 웹페이지 배포에서 쓸 수 없는 형식이라 base64 텍스트(.txt)로 바꿔 둔다(web/ocr.js가 풀어서 씀)
+const OCR_LANGS = {
+  kor: 'node_modules/@tesseract.js-data/kor/4.0.0_best_int/kor.traineddata.gz',
+  eng: 'node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz',
 };
 function copyOcr(dir) {
+  fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, src] of Object.entries(OCR_FILES)) fs.copyFileSync(path.join(ROOT, src), path.join(dir, name));
+  for (const [code, src] of Object.entries(OCR_LANGS)) fs.writeFileSync(path.join(dir, `${code}.traineddata.gz.txt`), fs.readFileSync(path.join(ROOT, src)).toString('base64'));
+  fs.copyFileSync(path.join(ROOT, 'web', 'ocr-worker-shim.js'), path.join(dir, 'worker-shim.js'));
 }
 
 // ① claude.ai 웹페이지(Artifact)용: 문서 골격 없이 본문만

@@ -2947,8 +2947,10 @@ async function worker() {
   if (!workerP) {
     workerP = (async () => {
       if (!window.Tesseract) await loadScript(abs('tesseract.min.js'));
+      // worker-shim.js: 학습데이터(.gz) 요청을 base64 텍스트(.gz.txt)로 받아 푼 뒤 원래 OCR 작업자를 실행
+      // (웹페이지 배포에서 .gz 파일을 쓸 수 없어서 텍스트로 바꿔 둠 — scripts/build-web.js)
       const w = await window.Tesseract.createWorker(['kor', 'eng'], 1, {
-        workerPath: abs('worker.min.js'),
+        workerPath: abs('worker-shim.js'),
         workerBlobURL: false,
         corePath: abs('tesseract-core-simd-lstm.wasm.js'),
         langPath: abs('.').replace(/\/$/, ''),
