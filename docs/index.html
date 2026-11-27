@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><rect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%230b5cad%22/><path d=%22M4 8l3 3 5-6%22 stroke=%22white%22 stroke-width=%222%22 fill=%22none%22/></svg>">
 <title>재해예방 기술지도 관리시스템</title>
 </head>
 <body>
@@ -388,7 +388,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); bor
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
-<script>window.__TG_LOCAL_BUILD = true;</script>
+<script>window.__TG_LOCAL_BUILD = true; window.__TG_OCR = { base: new URL('ocr/', location.href).href };</script>
 <script>
 (function () {
 'use strict';
@@ -1762,10 +1762,11 @@ async function extractText(buf, filename) {
     case '.hwpx': return hwpxText(buf);
     case '.xlsx': return xlsxText(buf);
     case '.txt': case '.csv': case '.md': return decodeText(buf);
+    case '.jpg': case '.jpeg': case '.png': return ''; // 이미지는 OCR로 읽는다(extractTextInfo)
     case '.hwp':
       throw new Error('HWP(구버전 한글) 파일은 DEMO에서 자동 분석을 지원하지 않습니다. PDF 또는 HWPX로 저장 후 올리거나, 정보를 직접 입력해 주세요.');
     default:
-      throw new Error(`지원하지 않는 파일 형식입니다(${ext || '확장자 없음'}). PDF, DOCX, HWPX, XLSX, TXT를 지원합니다.`);
+      throw new Error(`지원하지 않는 파일 형식입니다(${ext || '확장자 없음'}). PDF, DOCX, HWPX, XLSX, TXT, JPG, PNG를 지원합니다.`);
   }
 }
 
@@ -2074,27 +2075,98 @@ function parseTgContractText(text) {
   return { fields, evidence, missing, textPreview: joined.slice(0, 3000) };
 }
 
+// ───────────────────────── OCR(스캔 문서) ─────────────────────────
+// 글자층이 거의 없는 PDF(스캔본)와 이미지 파일은 OCR로 읽는다. OCR 엔진은 실행 환경별 구현(./ocr)을 쓴다.
+const OCR_MIN_CHARS = 40; // 글자층이 이보다 적으면 스캔본으로 본다
+
+// OCR이 자주 틀리는 글자: 라벨(콜론 앞) 부분에만 바로잡는다 — 값(업체명 등)은 건드리지 않음
+const LABEL_FIX = { 맥: '액', 앤: '액', 엑: '액', 삼: '상', 점: '정', 잠: '장', 뮤: '유', 메: '에', 막: '약', 림: '링', 엄: '업', 겸: '결', 긴: '간', 렵: '력', 몀: '명', 멍: '명' };
+const KNOWN_LABELS = ['계약금액', '계약기간', '계약상대자', '계약일자', '계약번호', '계약명', '공사명', '공사기간', '공사금액', '공사장소', '업체명', '도급금액', '수급인', '발주자', '기술지도기간', '기술지도횟수', '착공일', '준공예정일', '준공일', '상호'];
+
+function fixLabel(label) {
+  const compact = label.replace(/\s/g, '');
+  if (KNOWN_LABELS.some((k) => compact.includes(k))) return label;
+  const fixed = label.replace(/[가-힣]/g, (c) => LABEL_FIX[c] || c);
+  return KNOWN_LABELS.some((k) => fixed.replace(/\s/g, '').includes(k)) ? fixed : label;
+}
+
+function normalizeOcrText(text) {
+  return String(text || '').split('\n').map((line) => {
+    let l = line
+      .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+      .replace(/(\d)\s*[.,]\s*(?=\d{3}\b)/g, (m, d) => `${d},`) // 1.000 / 1 ,000 → 1,000 (천 단위)
+      .replace(/\bW\s?(?=\d{1,3}(?:,\d{3})+)/g, '₩')
+      // '원'을 8/B/임 등으로 잘못 읽은 경우: 정상 천 단위 숫자 뒤에 붙은 한 글자
+      .replace(/(\d{1,3}(?:,\d{3})+)[8B日읨임](?=\s|\(|\)|$)/g, '$1원');
+    const m = /^([^:：]{1,24})([:：])(.*)$/.exec(l);
+    if (m) l = fixLabel(m[1]) + m[2] + m[3];
+    return l;
+  }).join('\n');
+}
+
+async function extractTextInfo(buf, filename) {
+  const ext = path.extname(filename || '').toLowerCase();
+  const isImage = ['.jpg', '.jpeg', '.png'].includes(ext);
+  let text = isImage ? '' : await extractText(buf, filename);
+  const meaningful = String(text || '').replace(/\s/g, '').length;
+  if ((ext === '.pdf' && meaningful < OCR_MIN_CHARS) || isImage) {
+    let ocr;
+    try {
+      ocr = require('./ocr');
+    } catch {
+      ocr = null;
+    }
+    if (!ocr || (ocr.enabled && !ocr.enabled())) return { text, ocr: null, ocrUnavailable: true };
+    const r = isImage ? await ocr.ocrImage(buf) : await ocr.ocrPdf(buf);
+    return { text: normalizeOcrText(r.text), ocr: { pages: r.pages, totalPages: r.totalPages, confidence: r.confidence, ms: r.ms } };
+  }
+  return { text, ocr: null };
+}
+
 async function readText(buf, filename) {
-  const text = await extractText(buf, filename);
-  if (!text || text.replace(/\s/g, '').length < 10) return null;
-  return text;
+  let info;
+  try {
+    info = await extractTextInfo(buf, filename);
+  } catch (e) {
+    if (/\.(pdf|jpe?g|png)$/i.test(filename || '')) return { text: null, ocrError: e.message };
+    throw e;
+  }
+  if (!info.text || info.text.replace(/\s/g, '').length < 10) return { ...info, text: null };
+  return info;
 }
 
 const NO_TEXT = '텍스트를 추출하지 못했습니다(스캔 이미지 PDF 등). 정보를 직접 입력해 주세요.';
 
+function ocrNote(info) {
+  if (info.ocrError) return `스캔 문서로 보여 OCR(문자 인식)을 시도했으나 실패했습니다: ${info.ocrError} 정보를 직접 입력해 주세요.`;
+  if (info.ocrUnavailable) return 'OCR(문자 인식)을 사용할 수 없는 환경입니다. 정보를 직접 입력해 주세요.';
+  return NO_TEXT;
+}
+
+function withOcr(result, info) {
+  if (!info.ocr) return result;
+  const o = info.ocr;
+  const pages = o.totalPages > o.pages ? `${o.totalPages}쪽 중 앞 ${o.pages}쪽` : `${o.pages}쪽`;
+  return {
+    ...result,
+    ocr: o,
+    notice: `스캔 문서로 판단되어 OCR(문자 인식)로 읽었습니다 — ${pages}, 인식 신뢰도 ${o.confidence}%, ${(o.ms / 1000).toFixed(1)}초. 숫자·글자가 잘못 읽혔을 수 있으니 노란 칸을 계약서와 꼭 대조해 주세요.`,
+  };
+}
+
 async function analyzeContract(buf, filename, opts = {}) {
-  const text = await readText(buf, filename);
-  if (!text) return { fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], textPreview: '', warning: NO_TEXT };
-  return parseContractText(text, opts);
+  const info = await readText(buf, filename);
+  if (!info.text) return { fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], textPreview: '', warning: ocrNote(info) };
+  return withOcr(parseContractText(info.text, opts), info);
 }
 
 async function analyzeTgContract(buf, filename) {
-  const text = await readText(buf, filename);
-  if (!text) return { fields: {}, evidence: {}, missing: ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'], textPreview: '', warning: NO_TEXT };
-  return parseTgContractText(text);
+  const info = await readText(buf, filename);
+  if (!info.text) return { fields: {}, evidence: {}, missing: ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'], textPreview: '', warning: ocrNote(info) };
+  return withOcr(parseTgContractText(info.text), info);
 }
 
-module.exports = { analyzeContract, analyzeTgContract, parseContractText, parseTgContractText, parseKoreanAmount, extractText, datesIn, cellText };
+module.exports = { analyzeContract, analyzeTgContract, parseContractText, parseTgContractText, parseKoreanAmount, extractText, extractTextInfo, normalizeOcrText, datesIn, cellText };
 
 });
 __def("settlement", function (module, exports, require) {
@@ -2704,6 +2776,90 @@ async function usersTemplate() {
 module.exports = { importUsers, usersTemplate, toRole };
 
 });
+__def("ocrprep", function (module, exports, require) {
+'use strict';
+// OCR 전처리(서버·브라우저 공용): 표의 가로·세로 테두리선을 지운다(나머지는 원래 명암 유지).
+// 표 테두리가 남아 있으면 OCR 엔진이 칸 안의 글자를 놓치는 경우가 많다.
+// 이진화(흑백)는 흐린 스캔에서 오히려 인식률을 떨어뜨려 기본으로 쓰지 않는다.
+// (TEST 문서 스캔본 34개 평가, 필드 정답 수: 선 제거만 74·64 / 전처리 없음 70·64 / 이진화+선 제거 71·42 — 보통·흐린 스캔 순)
+// 입력/출력: { data: RGBA 배열(Uint8ClampedArray), width, height } — 캔버스 ImageData와 같은 모양
+
+function otsu(gray) {
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+  const total = gray.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = 0, t = 128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) { best = between; t = i; }
+  }
+  return t;
+}
+
+function preprocess(img, { removeLines = true, binarize = false } = {}) {
+  const { data, width: w, height: h } = img;
+  const n = w * h;
+  const gray = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) gray[i] = (data[j] * 299 + data[j + 1] * 587 + data[j + 2] * 114) / 1000;
+  const t = otsu(gray);
+  const ink = new Uint8Array(n);
+  for (let i = 0; i < n; i++) ink[i] = gray[i] <= t ? 1 : 0;
+
+  if (removeLines) {
+    // 글자 획보다 훨씬 긴 직선만 지운다(가로: 폭의 15% 이상, 세로: 높이의 4% 이상)
+    const minH = Math.max(80, Math.round(w * 0.15));
+    const minV = Math.max(80, Math.round(h * 0.04));
+    const kill = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+      let x = 0;
+      while (x < w) {
+        if (!ink[y * w + x]) { x++; continue; }
+        let e = x;
+        while (e < w && ink[y * w + e]) e++;
+        if (e - x >= minH) for (let k = x; k < e; k++) kill[y * w + k] = 1;
+        x = e;
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let y = 0;
+      while (y < h) {
+        if (!ink[y * w + x]) { y++; continue; }
+        let e = y;
+        while (e < h && ink[e * w + x]) e++;
+        if (e - y >= minV) for (let k = y; k < e; k++) kill[k * w + x] = 1;
+        y = e;
+      }
+    }
+    // 선 가장자리(번진 회색)까지 지우도록 1픽셀 넓힌다
+    const wide = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (kill[i] || (x > 0 && kill[i - 1]) || (x < w - 1 && kill[i + 1]) || (y > 0 && kill[i - w]) || (y < h - 1 && kill[i + w])) wide[i] = 1;
+      }
+    }
+    for (let i = 0; i < n; i++) if (wide[i]) { ink[i] = 0; gray[i] = 255; }
+  }
+
+  const out = new Uint8ClampedArray(n * 4);
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const v = binarize ? (ink[i] ? 0 : 255) : gray[i];
+    out[j] = v; out[j + 1] = v; out[j + 2] = v; out[j + 3] = 255;
+  }
+  return { data: out, width: w, height: h };
+}
+
+module.exports = { preprocess, otsu };
+
+});
 __def("db", function (module, exports, require) {
 'use strict';
 // 브라우저용 저장소: 메모리 상태 + 저장 신호(platform.js가 공유 저장소/브라우저 저장소에 반영)
@@ -2748,7 +2904,7 @@ __def("pdftext", function (module, exports, require) {
 module.exports = async function pdfText(buf) {
   const L = typeof window !== 'undefined' && window.pdfjsLib;
   if (!L) throw new Error('PDF 분석 기능을 불러오지 못했습니다. 정보를 직접 입력해 주세요.');
-  const doc = await L.getDocument({ data: buf, isEvalSupported: false }).promise;
+  const doc = await L.getDocument({ data: new Uint8Array(buf).slice(0), isEvalSupported: false }).promise;
   const pages = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const tc = await (await doc.getPage(i)).getTextContent();
@@ -2768,6 +2924,108 @@ module.exports = async function pdfText(buf) {
   await doc.destroy();
   return pages.join('\n');
 };
+
+});
+__def("ocr", function (module, exports, require) {
+'use strict';
+// 브라우저용 OCR: 스캔 PDF·이미지를 이 브라우저 안에서 읽는다(문서를 외부 서비스로 보내지 않음).
+//  - OCR 모델: Tesseract(LSTM) 한국어+영어 — 엔진·학습데이터는 페이지와 함께 배포된 ocr/ 폴더에서 불러온다
+//  - PDF 페이지 → 캔버스: pdf.js / 전처리: server/ocrprep.js (서버와 같은 코드)
+const { preprocess } = require('./ocrprep');
+
+const MAX_PAGES = 5;
+const SCALE = 3;
+let workerP = null;
+
+function cfg() { return (typeof window !== 'undefined' && window.__TG_OCR) || null; }
+function enabled() { return !!cfg(); }
+const abs = (rel) => new URL(rel, cfg().base || location.href).href;
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('OCR 엔진을 불러오지 못했습니다.'));
+    document.head.appendChild(s);
+  });
+}
+
+async function worker() {
+  if (!workerP) {
+    workerP = (async () => {
+      if (!window.Tesseract) await loadScript(abs('tesseract.min.js'));
+      const w = await window.Tesseract.createWorker(['kor', 'eng'], 1, {
+        workerPath: abs('worker.min.js'),
+        workerBlobURL: false,
+        corePath: abs('tesseract-core-simd-lstm.wasm.js'),
+        langPath: abs('.').replace(/\/$/, ''),
+        cacheMethod: 'none',
+        gzip: true,
+      });
+      await w.setParameters({ preserve_interword_spaces: '1' });
+      return w;
+    })().catch((e) => { workerP = null; throw new Error(`OCR 엔진을 시작하지 못했습니다: ${e && e.message ? e.message : e}`); });
+  }
+  return workerP;
+}
+
+async function recognizeCanvas(canvas) {
+  const ctx = canvas.getContext('2d');
+  const out = preprocess(ctx.getImageData(0, 0, canvas.width, canvas.height));
+  ctx.putImageData(new ImageData(out.data, out.width, out.height), 0, 0);
+  const w = await worker();
+  const { data } = await w.recognize(canvas);
+  return { text: data.text || '', confidence: data.confidence };
+}
+
+function whiteCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = Math.round(w);
+  c.height = Math.round(h);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+async function ocrPdf(buf) {
+  if (!enabled()) throw new Error('이 화면에서는 OCR을 사용할 수 없습니다.');
+  const L = window.pdfjsLib;
+  if (!L) throw new Error('PDF 분석 기능을 불러오지 못했습니다.');
+  const t0 = Date.now();
+  const doc = await L.getDocument({ data: new Uint8Array(buf).slice(0), isEvalSupported: false }).promise;
+  const n = Math.min(doc.numPages, MAX_PAGES);
+  const texts = [];
+  const confs = [];
+  for (let i = 1; i <= n; i++) {
+    const page = await doc.getPage(i);
+    const vp = page.getViewport({ scale: SCALE });
+    const c = whiteCanvas(vp.width, vp.height);
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    const r = await recognizeCanvas(c);
+    texts.push(r.text);
+    confs.push(r.confidence);
+  }
+  const total = doc.numPages;
+  await doc.destroy();
+  return { text: texts.join('\n'), pages: n, totalPages: total, confidence: avg(confs), ms: Date.now() - t0 };
+}
+
+async function ocrImage(buf) {
+  if (!enabled()) throw new Error('이 화면에서는 OCR을 사용할 수 없습니다.');
+  const t0 = Date.now();
+  const bmp = await createImageBitmap(new Blob([buf]));
+  const k = Math.min(3, Math.max(1, 2400 / Math.max(bmp.width, bmp.height)));
+  const c = whiteCanvas(bmp.width * k, bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  const r = await recognizeCanvas(c);
+  return { text: r.text, pages: 1, totalPages: 1, confidence: r.confidence, ms: Date.now() - t0 };
+}
+
+const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : 0);
+
+module.exports = { ocrPdf, ocrImage, enabled };
 
 });
 __def("docmap", function (module, exports, require) {
@@ -3747,8 +4005,8 @@ function openRegister() {
   const body = `
     <div id="reg-step1">
       <div class="dropzone" id="dz"><div style="font-size:28px">📄</div><b>공사 계약서 파일을 끌어다 놓거나 클릭하여 선택</b>
-        <div class="small muted" style="margin-top:6px">PDF(텍스트) · DOCX · HWPX · XLSX · TXT 지원 — 계약서에서 공사계약명/업체명/계약기간/계약금액을 자동 추출합니다.</div>
-        <input type="file" id="cfile" hidden accept=".pdf,.docx,.hwpx,.hwp,.xlsx,.txt"></div>
+        <div class="small muted" style="margin-top:6px">PDF · DOCX · HWPX · XLSX · TXT · JPG/PNG 지원 — 계약서에서 공사계약명/업체명/계약기간/계약금액을 자동 추출합니다. 스캔 PDF·사진은 OCR(문자 인식)로 읽습니다.</div>
+        <input type="file" id="cfile" hidden accept=".pdf,.docx,.hwpx,.hwp,.xlsx,.txt,.jpg,.jpeg,.png"></div>
       <div style="text-align:center;margin-top:10px"><a href="#" id="manual">계약서 없이 직접 입력하기</a></div>
     </div>
     <div id="reg-step2" hidden>
@@ -3795,8 +4053,8 @@ function openRegister() {
         for (const k of ['name', 'contractNo', 'companyName', 'period', 'amount', 'type']) if (ev[k]) $(`#ev-${k}`, el).textContent = `근거: ${ev[k]}`;
         $('#raw', el).textContent = extracted.textPreview || '(없음)';
         const miss = (extracted.missing || []).map((k) => ({ name: '공사계약명', companyName: '업체명', startDate: '계약 시작일', endDate: '계약 종료일', amount: '계약금액' }[k]));
-        $('#extract-msg', el).innerHTML = extracted.warning ? `<div class="alert warn">${esc(extracted.warning)}</div>`
-          : token ? `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 필요 정보를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값, 반드시 확인 후 등록)</span></div>` : '';
+        $('#extract-msg', el).innerHTML = (extracted.notice ? `<div class="alert info">🔍 ${esc(extracted.notice)}</div>` : '') + (extracted.warning ? `<div class="alert warn">${esc(extracted.warning)}</div>`
+          : token ? `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 필요 정보를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값, 반드시 확인 후 등록)</span></div>` : '');
         syncContractor();
         preview();
       };
@@ -3819,7 +4077,7 @@ function openRegister() {
         $('#preview', el).innerHTML = html;
       };
       const analyze = async (file) => {
-        dz.innerHTML = '<div style="font-size:28px">⏳</div><b>계약서 분석 중...</b>';
+        dz.innerHTML = '<div style="font-size:28px">⏳</div><b>계약서 분석 중...</b><div class="small muted" style="margin-top:6px">스캔 PDF·사진은 OCR(문자 인식)로 읽어 쪽당 5~20초 걸릴 수 있습니다.</div>';
         const fd = new FormData(); fd.append('file', file);
         try {
           extracted = await api('POST', '/contracts/analyze', fd);
@@ -4185,7 +4443,7 @@ function renderActions(p) {
     tg.addEventListener('dz-change', async (e) => {
       const f = e.detail.files[0];
       if (!f) return;
-      $('#tg-msg').innerHTML = '<div class="alert info">⏳ 계약서 분석 중...</div>';
+      $('#tg-msg').innerHTML = '<div class="alert info">⏳ 계약서 분석 중... (스캔본은 OCR로 읽어 쪽당 5~20초 걸릴 수 있습니다)</div>';
       const fd = new FormData(); fd.append('file', f);
       try {
         const r = await api('POST', '/tg-contracts/analyze', fd);
@@ -4194,8 +4452,8 @@ function renderActions(p) {
         set('contractDate', fl.contractDate); set('guidanceStart', fl.guidanceStart); set('guidanceEnd', fl.guidanceEnd); set('plannedCount', fl.plannedCount);
         for (const k of ['contractDate', 'period', 'plannedCount']) { const d = $(`[data-ev="${k}"]`, tg); if (d) d.textContent = ev[k] ? `근거: ${ev[k]}` : ''; }
         const miss = (r.missing || []).map((k) => ({ contractDate: '계약일자', guidanceStart: '기술지도 시작일', guidanceEnd: '기술지도 종료일', plannedCount: '기술지도 횟수' }[k]));
-        $('#tg-msg').innerHTML = r.warning ? `<div class="alert warn">${esc(r.warning)}</div>`
-          : `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 계약일자·기간·횟수를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값)</span></div>`;
+        $('#tg-msg').innerHTML = (r.notice ? `<div class="alert info">🔍 ${esc(r.notice)}</div>` : '') + (r.warning ? `<div class="alert warn">${esc(r.warning)}</div>`
+          : `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 계약일자·기간·횟수를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값)</span></div>`);
       } catch (err) { $('#tg-msg').innerHTML = `<div class="alert warn">${esc(err.message)}</div>`; }
     });
   }

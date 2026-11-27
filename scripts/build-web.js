@@ -17,8 +17,10 @@ const MODULES = {
   seed: 'server/seed.js',
   views: 'server/views.js',
   userimport: 'server/userimport.js',
+  ocrprep: 'server/ocrprep.js',
   db: 'web/db.js',
   pdftext: 'web/pdftext.js',
+  ocr: 'web/ocr.js',
   docmap: 'web/docmap.js',
   router: 'web/router.js',
   platform: 'web/platform.js',
@@ -79,7 +81,7 @@ ${css}
 <div id="modal-root"></div>
 <div id="toast-root"></div>
 ${LIBS.map((u) => `<script src="${u}"></script>`).join('\n')}
-<script>window.__TG_LOCAL_BUILD = true;</script>
+<script>window.__TG_LOCAL_BUILD = true; window.__TG_OCR = { base: new URL('ocr/', location.href).href };</script>
 <script>
 ${bundle}
 </script>
@@ -88,14 +90,28 @@ ${app}
 </script>
 `;
 
+// OCR 엔진·학습데이터(페이지 옆 ocr/ 폴더로 함께 배포 — 외부 CDN 없이 같은 출처에서 불러온다)
+const OCR_FILES = {
+  'tesseract.min.js': 'node_modules/tesseract.js/dist/tesseract.min.js',
+  'worker.min.js': 'node_modules/tesseract.js/dist/worker.min.js',
+  'tesseract-core-simd-lstm.wasm.js': 'node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js',
+  'kor.traineddata.gz': 'node_modules/@tesseract.js-data/kor/4.0.0_best_int/kor.traineddata.gz',
+  'eng.traineddata.gz': 'node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz',
+};
+function copyOcr(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, src] of Object.entries(OCR_FILES)) fs.copyFileSync(path.join(ROOT, src), path.join(dir, name));
+}
+
 // ① claude.ai 웹페이지(Artifact)용: 문서 골격 없이 본문만
 const out = path.join(ROOT, 'web', 'dist', 'tg-demo.html');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, html);
+copyOcr(path.join(ROOT, 'web', 'dist', 'ocr'));
 console.log(`웹페이지 빌드 완료: ${path.relative(ROOT, out)} (${(html.length / 1024).toFixed(0)} KB)`);
 
 // ② GitHub Pages용: 완전한 HTML 문서 (docs/index.html). 데이터는 각 브라우저에 저장된다.
-const icon = read('public/index.html').match(/<link rel="icon"[^>]*>/);
+const icon = read('public/index.html').match(/<link rel="icon" href="[^"]*">/); // 속성값 안의 '>' 때문에 [^>]* 로 자르면 안 됨
 const page = `<!doctype html>
 <html lang="ko">
 <head>
@@ -112,4 +128,5 @@ ${html.split('\n').slice(1).join('\n')}
 const pagesOut = path.join(ROOT, 'docs', 'index.html');
 fs.writeFileSync(pagesOut, page);
 fs.writeFileSync(path.join(ROOT, 'docs', '.nojekyll'), '');
+copyOcr(path.join(ROOT, 'docs', 'ocr'));
 console.log(`GitHub Pages 빌드 완료: ${path.relative(ROOT, pagesOut)}`);

@@ -473,8 +473,8 @@ function openRegister() {
   const body = `
     <div id="reg-step1">
       <div class="dropzone" id="dz"><div style="font-size:28px">📄</div><b>공사 계약서 파일을 끌어다 놓거나 클릭하여 선택</b>
-        <div class="small muted" style="margin-top:6px">PDF(텍스트) · DOCX · HWPX · XLSX · TXT 지원 — 계약서에서 공사계약명/업체명/계약기간/계약금액을 자동 추출합니다.</div>
-        <input type="file" id="cfile" hidden accept=".pdf,.docx,.hwpx,.hwp,.xlsx,.txt"></div>
+        <div class="small muted" style="margin-top:6px">PDF · DOCX · HWPX · XLSX · TXT · JPG/PNG 지원 — 계약서에서 공사계약명/업체명/계약기간/계약금액을 자동 추출합니다. 스캔 PDF·사진은 OCR(문자 인식)로 읽습니다.</div>
+        <input type="file" id="cfile" hidden accept=".pdf,.docx,.hwpx,.hwp,.xlsx,.txt,.jpg,.jpeg,.png"></div>
       <div style="text-align:center;margin-top:10px"><a href="#" id="manual">계약서 없이 직접 입력하기</a></div>
     </div>
     <div id="reg-step2" hidden>
@@ -521,8 +521,8 @@ function openRegister() {
         for (const k of ['name', 'contractNo', 'companyName', 'period', 'amount', 'type']) if (ev[k]) $(`#ev-${k}`, el).textContent = `근거: ${ev[k]}`;
         $('#raw', el).textContent = extracted.textPreview || '(없음)';
         const miss = (extracted.missing || []).map((k) => ({ name: '공사계약명', companyName: '업체명', startDate: '계약 시작일', endDate: '계약 종료일', amount: '계약금액' }[k]));
-        $('#extract-msg', el).innerHTML = extracted.warning ? `<div class="alert warn">${esc(extracted.warning)}</div>`
-          : token ? `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 필요 정보를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값, 반드시 확인 후 등록)</span></div>` : '';
+        $('#extract-msg', el).innerHTML = (extracted.notice ? `<div class="alert info">🔍 ${esc(extracted.notice)}</div>` : '') + (extracted.warning ? `<div class="alert warn">${esc(extracted.warning)}</div>`
+          : token ? `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 필요 정보를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값, 반드시 확인 후 등록)</span></div>` : '');
         syncContractor();
         preview();
       };
@@ -545,7 +545,7 @@ function openRegister() {
         $('#preview', el).innerHTML = html;
       };
       const analyze = async (file) => {
-        dz.innerHTML = '<div style="font-size:28px">⏳</div><b>계약서 분석 중...</b>';
+        dz.innerHTML = '<div style="font-size:28px">⏳</div><b>계약서 분석 중...</b><div class="small muted" style="margin-top:6px">스캔 PDF·사진은 OCR(문자 인식)로 읽어 쪽당 5~20초 걸릴 수 있습니다.</div>';
         const fd = new FormData(); fd.append('file', file);
         try {
           extracted = await api('POST', '/contracts/analyze', fd);
@@ -911,7 +911,7 @@ function renderActions(p) {
     tg.addEventListener('dz-change', async (e) => {
       const f = e.detail.files[0];
       if (!f) return;
-      $('#tg-msg').innerHTML = '<div class="alert info">⏳ 계약서 분석 중...</div>';
+      $('#tg-msg').innerHTML = '<div class="alert info">⏳ 계약서 분석 중... (스캔본은 OCR로 읽어 쪽당 5~20초 걸릴 수 있습니다)</div>';
       const fd = new FormData(); fd.append('file', f);
       try {
         const r = await api('POST', '/tg-contracts/analyze', fd);
@@ -920,8 +920,8 @@ function renderActions(p) {
         set('contractDate', fl.contractDate); set('guidanceStart', fl.guidanceStart); set('guidanceEnd', fl.guidanceEnd); set('plannedCount', fl.plannedCount);
         for (const k of ['contractDate', 'period', 'plannedCount']) { const d = $(`[data-ev="${k}"]`, tg); if (d) d.textContent = ev[k] ? `근거: ${ev[k]}` : ''; }
         const miss = (r.missing || []).map((k) => ({ contractDate: '계약일자', guidanceStart: '기술지도 시작일', guidanceEnd: '기술지도 종료일', plannedCount: '기술지도 횟수' }[k]));
-        $('#tg-msg').innerHTML = r.warning ? `<div class="alert warn">${esc(r.warning)}</div>`
-          : `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 계약일자·기간·횟수를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값)</span></div>`;
+        $('#tg-msg').innerHTML = (r.notice ? `<div class="alert info">🔍 ${esc(r.notice)}</div>` : '') + (r.warning ? `<div class="alert warn">${esc(r.warning)}</div>`
+          : `<div class="alert ${miss.length ? 'warn' : 'ok'}">${miss.length ? `일부 항목을 찾지 못했습니다: <b>${esc(miss.join(', '))}</b> — 직접 입력해 주세요.` : '계약서에서 계약일자·기간·횟수를 추출했습니다.'} <span class="small">(노란색 = 자동 추출값)</span></div>`);
       } catch (err) { $('#tg-msg').innerHTML = `<div class="alert warn">${esc(err.message)}</div>`; }
     });
   }

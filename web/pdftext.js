@@ -3,7 +3,7 @@
 module.exports = async function pdfText(buf) {
   const L = typeof window !== 'undefined' && window.pdfjsLib;
   if (!L) throw new Error('PDF 분석 기능을 불러오지 못했습니다. 정보를 직접 입력해 주세요.');
-  const doc = await L.getDocument({ data: buf, isEvalSupported: false }).promise;
+  const doc = await L.getDocument({ data: new Uint8Array(buf).slice(0), isEvalSupported: false }).promise;
   const pages = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const tc = await (await doc.getPage(i)).getTextContent();

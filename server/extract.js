@@ -81,10 +81,11 @@ async function extractText(buf, filename) {
     case '.hwpx': return hwpxText(buf);
     case '.xlsx': return xlsxText(buf);
     case '.txt': case '.csv': case '.md': return decodeText(buf);
+    case '.jpg': case '.jpeg': case '.png': return ''; // 이미지는 OCR로 읽는다(extractTextInfo)
     case '.hwp':
       throw new Error('HWP(구버전 한글) 파일은 DEMO에서 자동 분석을 지원하지 않습니다. PDF 또는 HWPX로 저장 후 올리거나, 정보를 직접 입력해 주세요.');
     default:
-      throw new Error(`지원하지 않는 파일 형식입니다(${ext || '확장자 없음'}). PDF, DOCX, HWPX, XLSX, TXT를 지원합니다.`);
+      throw new Error(`지원하지 않는 파일 형식입니다(${ext || '확장자 없음'}). PDF, DOCX, HWPX, XLSX, TXT, JPG, PNG를 지원합니다.`);
   }
 }
 
@@ -393,24 +394,95 @@ function parseTgContractText(text) {
   return { fields, evidence, missing, textPreview: joined.slice(0, 3000) };
 }
 
+// ───────────────────────── OCR(스캔 문서) ─────────────────────────
+// 글자층이 거의 없는 PDF(스캔본)와 이미지 파일은 OCR로 읽는다. OCR 엔진은 실행 환경별 구현(./ocr)을 쓴다.
+const OCR_MIN_CHARS = 40; // 글자층이 이보다 적으면 스캔본으로 본다
+
+// OCR이 자주 틀리는 글자: 라벨(콜론 앞) 부분에만 바로잡는다 — 값(업체명 등)은 건드리지 않음
+const LABEL_FIX = { 맥: '액', 앤: '액', 엑: '액', 삼: '상', 점: '정', 잠: '장', 뮤: '유', 메: '에', 막: '약', 림: '링', 엄: '업', 겸: '결', 긴: '간', 렵: '력', 몀: '명', 멍: '명' };
+const KNOWN_LABELS = ['계약금액', '계약기간', '계약상대자', '계약일자', '계약번호', '계약명', '공사명', '공사기간', '공사금액', '공사장소', '업체명', '도급금액', '수급인', '발주자', '기술지도기간', '기술지도횟수', '착공일', '준공예정일', '준공일', '상호'];
+
+function fixLabel(label) {
+  const compact = label.replace(/\s/g, '');
+  if (KNOWN_LABELS.some((k) => compact.includes(k))) return label;
+  const fixed = label.replace(/[가-힣]/g, (c) => LABEL_FIX[c] || c);
+  return KNOWN_LABELS.some((k) => fixed.replace(/\s/g, '').includes(k)) ? fixed : label;
+}
+
+function normalizeOcrText(text) {
+  return String(text || '').split('\n').map((line) => {
+    let l = line
+      .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+      .replace(/(\d)\s*[.,]\s*(?=\d{3}\b)/g, (m, d) => `${d},`) // 1.000 / 1 ,000 → 1,000 (천 단위)
+      .replace(/\bW\s?(?=\d{1,3}(?:,\d{3})+)/g, '₩')
+      // '원'을 8/B/임 등으로 잘못 읽은 경우: 정상 천 단위 숫자 뒤에 붙은 한 글자
+      .replace(/(\d{1,3}(?:,\d{3})+)[8B日읨임](?=\s|\(|\)|$)/g, '$1원');
+    const m = /^([^:：]{1,24})([:：])(.*)$/.exec(l);
+    if (m) l = fixLabel(m[1]) + m[2] + m[3];
+    return l;
+  }).join('\n');
+}
+
+async function extractTextInfo(buf, filename) {
+  const ext = path.extname(filename || '').toLowerCase();
+  const isImage = ['.jpg', '.jpeg', '.png'].includes(ext);
+  let text = isImage ? '' : await extractText(buf, filename);
+  const meaningful = String(text || '').replace(/\s/g, '').length;
+  if ((ext === '.pdf' && meaningful < OCR_MIN_CHARS) || isImage) {
+    let ocr;
+    try {
+      ocr = require('./ocr');
+    } catch {
+      ocr = null;
+    }
+    if (!ocr || (ocr.enabled && !ocr.enabled())) return { text, ocr: null, ocrUnavailable: true };
+    const r = isImage ? await ocr.ocrImage(buf) : await ocr.ocrPdf(buf);
+    return { text: normalizeOcrText(r.text), ocr: { pages: r.pages, totalPages: r.totalPages, confidence: r.confidence, ms: r.ms } };
+  }
+  return { text, ocr: null };
+}
+
 async function readText(buf, filename) {
-  const text = await extractText(buf, filename);
-  if (!text || text.replace(/\s/g, '').length < 10) return null;
-  return text;
+  let info;
+  try {
+    info = await extractTextInfo(buf, filename);
+  } catch (e) {
+    if (/\.(pdf|jpe?g|png)$/i.test(filename || '')) return { text: null, ocrError: e.message };
+    throw e;
+  }
+  if (!info.text || info.text.replace(/\s/g, '').length < 10) return { ...info, text: null };
+  return info;
 }
 
 const NO_TEXT = '텍스트를 추출하지 못했습니다(스캔 이미지 PDF 등). 정보를 직접 입력해 주세요.';
 
+function ocrNote(info) {
+  if (info.ocrError) return `스캔 문서로 보여 OCR(문자 인식)을 시도했으나 실패했습니다: ${info.ocrError} 정보를 직접 입력해 주세요.`;
+  if (info.ocrUnavailable) return 'OCR(문자 인식)을 사용할 수 없는 환경입니다. 정보를 직접 입력해 주세요.';
+  return NO_TEXT;
+}
+
+function withOcr(result, info) {
+  if (!info.ocr) return result;
+  const o = info.ocr;
+  const pages = o.totalPages > o.pages ? `${o.totalPages}쪽 중 앞 ${o.pages}쪽` : `${o.pages}쪽`;
+  return {
+    ...result,
+    ocr: o,
+    notice: `스캔 문서로 판단되어 OCR(문자 인식)로 읽었습니다 — ${pages}, 인식 신뢰도 ${o.confidence}%, ${(o.ms / 1000).toFixed(1)}초. 숫자·글자가 잘못 읽혔을 수 있으니 노란 칸을 계약서와 꼭 대조해 주세요.`,
+  };
+}
+
 async function analyzeContract(buf, filename, opts = {}) {
-  const text = await readText(buf, filename);
-  if (!text) return { fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], textPreview: '', warning: NO_TEXT };
-  return parseContractText(text, opts);
+  const info = await readText(buf, filename);
+  if (!info.text) return { fields: {}, evidence: {}, missing: ['name', 'companyName', 'startDate', 'endDate', 'amount'], textPreview: '', warning: ocrNote(info) };
+  return withOcr(parseContractText(info.text, opts), info);
 }
 
 async function analyzeTgContract(buf, filename) {
-  const text = await readText(buf, filename);
-  if (!text) return { fields: {}, evidence: {}, missing: ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'], textPreview: '', warning: NO_TEXT };
-  return parseTgContractText(text);
+  const info = await readText(buf, filename);
+  if (!info.text) return { fields: {}, evidence: {}, missing: ['contractDate', 'guidanceStart', 'guidanceEnd', 'plannedCount'], textPreview: '', warning: ocrNote(info) };
+  return withOcr(parseTgContractText(info.text), info);
 }
 
-module.exports = { analyzeContract, analyzeTgContract, parseContractText, parseTgContractText, parseKoreanAmount, extractText, datesIn, cellText };
+module.exports = { analyzeContract, analyzeTgContract, parseContractText, parseTgContractText, parseKoreanAmount, extractText, extractTextInfo, normalizeOcrText, datesIn, cellText };
